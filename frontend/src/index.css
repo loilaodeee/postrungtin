@@ -1,0 +1,13 @@
+/* Reset styles that interfere with App.css */
+body {
+  margin: 0;
+  padding: 0;
+}
+#root {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  text-align: left !important;
+  border: none !important;
+  min-height: auto !important;
+}

@@ -1,0 +1,17 @@
+{
+  "name": "postrungtin-pos-system",
+  "version": "1.0.0",
+  "description": " POS System for Noodle Restaurant",
+  "main": "backend/server.js",
+  "scripts": {
+    "install-all": "npm install --prefix backend && npm install --prefix frontend",
+    "dev-backend": "npm run dev --prefix backend",
+    "dev-frontend": "npm run dev --prefix frontend",
+    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run build && npm start --prefix backend"
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
