@@ -14,7 +14,7 @@ const io = new Server(server, {
   }
 });
 
-const PORT = process.env.PORT || 3005;
+const PORT = process.env.PORT || 80;
 const STATE_FILE = path.join(__dirname, 'data', 'state.json');
 const FCM_TOKENS_FILE = path.join(__dirname, 'data', 'fcm_tokens.json');
 const SERVICE_ACCOUNT_FILE = path.join(__dirname, 'data', 'firebase-service-account.json');
