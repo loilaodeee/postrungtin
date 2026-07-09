@@ -16,10 +16,179 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3005;
 const STATE_FILE = path.join(__dirname, 'data', 'state.json');
+const FCM_TOKENS_FILE = path.join(__dirname, 'data', 'fcm_tokens.json');
+const SERVICE_ACCOUNT_FILE = path.join(__dirname, 'data', 'firebase-service-account.json');
+
+// Database storage configurations (PostgreSQL) for Cloud deployments
+const { Pool } = require('pg');
+let pool = null;
+if (process.env.DATABASE_URL) {
+  console.log('DATABASE_URL detected. Initializing database storage...');
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  });
+}
+
+async function initDatabase() {
+  if (!pool) return;
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS system_state (
+        key VARCHAR(50) PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS fcm_tokens (
+        token TEXT PRIMARY KEY
+      );
+    `);
+    console.log('Database tables verified/created successfully.');
+  } catch (error) {
+    console.error('Failed to initialize database tables:', error);
+  }
+}
 
 // Ensure data directory exists
 if (!fs.existsSync(path.join(__dirname, 'data'))) {
   fs.mkdirSync(path.join(__dirname, 'data'));
+}
+
+// Initialize Firebase Admin for background push notifications
+const admin = require('firebase-admin');
+const { getMessaging } = require('firebase-admin/messaging');
+let firebaseApp = null;
+let pushEnabled = false;
+
+if (fs.existsSync(SERVICE_ACCOUNT_FILE)) {
+  try {
+    const serviceAccount = require(SERVICE_ACCOUNT_FILE);
+    firebaseApp = admin.initializeApp({
+      credential: admin.cert(serviceAccount)
+    });
+    pushEnabled = true;
+    console.log('Firebase Admin initialized successfully. Push notifications are enabled.');
+  } catch (error) {
+    console.error('Error initializing Firebase Admin with service account key:', error);
+  }
+} else {
+  console.log('Firebase service account key not found at backend/data/firebase-service-account.json. Background push notifications will be disabled.');
+}
+
+// Registry to track registered FCM tokens
+let fcmTokens = new Set();
+
+async function loadFcmTokens() {
+  if (pool) {
+    try {
+      const res = await pool.query('SELECT token FROM fcm_tokens');
+      fcmTokens = new Set(res.rows.map(row => row.token));
+      console.log(`Loaded ${fcmTokens.size} FCM token(s) from database.`);
+    } catch (error) {
+      console.error('Error loading FCM tokens from database:', error);
+    }
+  } else {
+    try {
+      if (fs.existsSync(FCM_TOKENS_FILE)) {
+        const data = fs.readFileSync(FCM_TOKENS_FILE, 'utf8');
+        const tokensArray = JSON.parse(data);
+        fcmTokens = new Set(tokensArray);
+        console.log(`Loaded ${fcmTokens.size} FCM token(s) from registry.`);
+      }
+    } catch (error) {
+      console.error('Error loading FCM tokens:', error);
+    }
+  }
+}
+
+async function saveFcmToken(token) {
+  if (!token || fcmTokens.has(token)) return;
+  fcmTokens.add(token);
+  if (pool) {
+    try {
+      await pool.query('INSERT INTO fcm_tokens (token) VALUES ($1) ON CONFLICT (token) DO NOTHING', [token]);
+      console.log('FCM token registered and saved to database.');
+    } catch (error) {
+      console.error('Error saving FCM token to database:', error);
+    }
+  } else {
+    try {
+      fs.writeFileSync(FCM_TOKENS_FILE, JSON.stringify(Array.from(fcmTokens), null, 2), 'utf8');
+      console.log('FCM token registered and saved to database.');
+    } catch (error) {
+      console.error('Error saving FCM tokens:', error);
+    }
+  }
+}
+
+async function removeFcmToken(token) {
+  if (!token) return;
+  fcmTokens.delete(token);
+  if (pool) {
+    try {
+      await pool.query('DELETE FROM fcm_tokens WHERE token = $1', [token]);
+      console.log('FCM token removed from database.');
+    } catch (error) {
+      console.error('Error deleting FCM token from database:', error);
+    }
+  } else {
+    try {
+      fs.writeFileSync(FCM_TOKENS_FILE, JSON.stringify(Array.from(fcmTokens), null, 2), 'utf8');
+    } catch (error) {
+      console.error('Error updating FCM tokens file:', error);
+    }
+  }
+}
+
+// Global notification trigger helper
+function sendPushNotification(title, body, dataPayload = {}) {
+  if (!pushEnabled || fcmTokens.size === 0) {
+    console.log(`Push notifications skipped. PushEnabled: ${pushEnabled}, Active FCM client count: ${fcmTokens.size}`);
+    return;
+  }
+
+  const tokens = Array.from(fcmTokens);
+  console.log(`Sending background push notification to ${tokens.length} client(s)...`);
+
+  const message = {
+    notification: {
+      title: title,
+      body: body
+    },
+    data: {
+      ...dataPayload,
+      click_action: 'FLUTTER_NOTIFICATION_CLICK'
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        sound: 'default',
+        channelId: 'pos_high_importance_channel',
+        priority: 'max',
+        visibility: 'public'
+      }
+    }
+  };
+
+  tokens.forEach(token => {
+    getMessaging().send({
+      ...message,
+      token: token
+    })
+    .then((response) => {
+      console.log('Successfully sent push notification to token:', token.substring(0, 10) + '...');
+    })
+    .catch((error) => {
+      console.error('Error sending message to token:', token.substring(0, 10) + '...', error.code);
+      if (error.code === 'messaging/registration-token-not-registered' || error.code === 'messaging/invalid-argument') {
+        console.log('Removing inactive FCM token:', token.substring(0, 10) + '...');
+        removeFcmToken(token);
+      }
+    });
+  });
 }
 
 // Initial default state
@@ -40,8 +209,7 @@ const initialTables = {
   "Bàn 3": { items: [], startTime: null, status: 'empty' },
   "Bàn 4": { items: [], startTime: null, status: 'empty' },
   "Bàn 5": { items: [], startTime: null, status: 'empty' },
-  "Bàn 6": { items: [], startTime: null, status: 'empty' },
-  "Mang Về": { items: [], startTime: null, status: 'empty' }
+  "Bàn 6": { items: [], startTime: null, status: 'empty' }
 };
 
 let state = {
@@ -51,34 +219,74 @@ let state = {
   history: []       // Completed historical transactions
 };
 
-// Load state from file if exists
-function loadState() {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const data = fs.readFileSync(STATE_FILE, 'utf8');
-      const loaded = JSON.parse(data);
-      // Merge with initialTables and defaultMenu
-      state.tables = loaded.tables || { ...initialTables };
-      state.menu = loaded.menu || [...defaultMenu];
-      state.kitchenOrders = loaded.kitchenOrders || [];
-      state.history = loaded.history || [];
-      console.log('State loaded successfully from file.');
+// Load state from file or PostgreSQL database
+async function loadState() {
+  if (pool) {
+    try {
+      const res = await pool.query("SELECT value FROM system_state WHERE key = 'current_state'");
+      if (res.rows.length > 0) {
+        const loaded = JSON.parse(res.rows[0].value);
+        state.tables = loaded.tables || { ...initialTables };
+        
+        // Clean up legacy static 'Mang Về' table if it exists
+        if (state.tables["Mang Về"]) {
+          delete state.tables["Mang Về"];
+        }
+        
+        state.menu = loaded.menu || [...defaultMenu];
+        state.kitchenOrders = loaded.kitchenOrders || [];
+        state.history = loaded.history || [];
+        console.log('State loaded successfully from database.');
+      } else {
+        console.log('No state found in database, using default state.');
+      }
+    } catch (error) {
+      console.error('Error loading state from database, using default state:', error);
     }
-  } catch (error) {
-    console.error('Error loading state from file, using default state:', error);
+  } else {
+    try {
+      if (fs.existsSync(STATE_FILE)) {
+        const data = fs.readFileSync(STATE_FILE, 'utf8');
+        const loaded = JSON.parse(data);
+        // Merge with initialTables and defaultMenu
+        state.tables = loaded.tables || { ...initialTables };
+        
+        // Clean up legacy static 'Mang Về' table if it exists
+        if (state.tables["Mang Về"]) {
+          delete state.tables["Mang Về"];
+        }
+        
+        state.menu = loaded.menu || [...defaultMenu];
+        state.kitchenOrders = loaded.kitchenOrders || [];
+        state.history = loaded.history || [];
+        console.log('State loaded successfully from file.');
+      }
+    } catch (error) {
+      console.error('Error loading state from file, using default state:', error);
+    }
   }
 }
 
-// Save state to file
-function saveState() {
-  try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
-  } catch (error) {
-    console.error('Error saving state to file:', error);
+// Save state to file or PostgreSQL database
+async function saveState() {
+  if (pool) {
+    try {
+      const valStr = JSON.stringify(state);
+      await pool.query(
+        "INSERT INTO system_state (key, value) VALUES ('current_state', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        [valStr]
+      );
+    } catch (error) {
+      console.error('Error saving state to database:', error);
+    }
+  } else {
+    try {
+      fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    } catch (error) {
+      console.error('Error saving state to file:', error);
+    }
   }
 }
-
-loadState();
 
 
 app.use(cors());
@@ -143,6 +351,10 @@ io.on('connection', (socket) => {
   // Send current state on connection
   socket.emit('state-update', state);
 
+  socket.on('disconnect', (reason) => {
+    console.log(`Client disconnected: ${socket.id}, reason: ${reason}`);
+  });
+
   // When order is placed by POS client
   socket.on('place-order', ({ tableName, items }) => {
     if (!state.tables[tableName]) {
@@ -185,6 +397,13 @@ io.on('connection', (socket) => {
     io.emit('state-update', state);
     // Specifically trigger kitchen notification sound event
     io.emit('new-kitchen-order', { tableName, time: timeStr });
+
+    // Send native background push notification to all mobile devices
+    sendPushNotification(
+      '🍳 Đơn hàng mới!',
+      `Bàn/Phòng: ${tableName} vừa gọi món mới.`,
+      { type: 'new-order', tableName }
+    );
   });
 
   // Toggle state of an individual item in a kitchen ticket (checked/unchecked)
@@ -217,6 +436,13 @@ io.on('connection', (socket) => {
       io.emit('state-update', state);
       // Trigger served notification audio event on POS
       io.emit('order-served', { tableName });
+
+      // Send native background push notification to all mobile devices
+      sendPushNotification(
+        '✅ Món ăn hoàn thành',
+        `${tableName} đã chế biến xong. Hãy phục vụ khách!`,
+        { type: 'served', tableName }
+      );
     }
   });
 
@@ -238,6 +464,35 @@ io.on('connection', (socket) => {
       saveState();
       io.emit('state-update', state);
     }
+  });
+
+  // Create a new dynamic takeaway table ticket
+  socket.on('create-takeaway', () => {
+    const prefix = 'Mang Về ';
+    const activeTakeaways = Object.keys(state.tables).filter(k => k.startsWith(prefix));
+    
+    let nextNumber = 1;
+    // Find the lowest available number
+    while (state.tables[`${prefix}${nextNumber}`]) {
+      nextNumber++;
+    }
+    
+    const newKey = `${prefix}${nextNumber}`;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    
+    state.tables[newKey] = {
+      items: [],
+      startTime: timeStr,
+      status: 'empty'
+    };
+    
+    console.log(`Created dynamic takeaway ticket: ${newKey}`);
+    saveState();
+    io.emit('state-update', state);
+    
+    // Send dynamic feedback to requesting socket client to automatically select it
+    socket.emit('takeaway-created', newKey);
   });
 
   // Clear/Pay table
@@ -264,8 +519,14 @@ io.on('connection', (socket) => {
       state.history.push(historicalRecord);
     }
     
-    // Reset table
-    state.tables[tableName] = { items: [], startTime: null, status: 'empty' };
+    // If it's a dynamic takeaway table, delete the key entirely to keep the screen clean!
+    if (tableName.startsWith('Mang Về ')) {
+      delete state.tables[tableName];
+      console.log(`Deleted dynamic takeaway ticket: ${tableName}`);
+    } else {
+      // Reset standard physical table
+      state.tables[tableName] = { items: [], startTime: null, status: 'empty' };
+    }
     
     // Also remove any active kitchen orders for this table
     state.kitchenOrders = state.kitchenOrders.filter(o => o.tableName !== tableName);
@@ -282,8 +543,7 @@ io.on('connection', (socket) => {
       "Bàn 3": { items: [], startTime: null, status: 'empty' },
       "Bàn 4": { items: [], startTime: null, status: 'empty' },
       "Bàn 5": { items: [], startTime: null, status: 'empty' },
-      "Bàn 6": { items: [], startTime: null, status: 'empty' },
-      "Mang Về": { items: [], startTime: null, status: 'empty' }
+      "Bàn 6": { items: [], startTime: null, status: 'empty' }
     };
     state.menu = [...defaultMenu];
     state.kitchenOrders = [];
@@ -344,11 +604,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
+  // Register device FCM token for push notifications
+  socket.on('register-fcm-token', (token) => {
+    console.log(`FCM Token registration request from client ${socket.id}`);
+    saveFcmToken(token);
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+(async () => {
+  await initDatabase();
+  await loadFcmTokens();
+  await loadState();
+
+  server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+  });
+})();

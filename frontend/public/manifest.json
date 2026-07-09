@@ -1,0 +1,17 @@
+{
+  "name": "Hủ Tiếu Trung Tín POS",
+  "short_name": "Trung Tín POS",
+  "description": "Hệ thống POS đặt món Hủ Tiếu Trung Tín thời gian thực",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f4f6fa",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

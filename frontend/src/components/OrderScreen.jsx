@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
-import { ShoppingCart, Send, CreditCard, Trash2, Info, LayoutGrid, UtensilsCrossed } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ShoppingCart, Send, CreditCard, Trash2, Info, LayoutGrid, UtensilsCrossed, Clock, CheckCircle } from 'lucide-react';
 import NoteModal from './NoteModal';
+import { socket } from '../socket';
+
+const PRICE_PER_PORTION = 40000;
 
 export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
   const [selectedTable, setSelectedTable] = useState(null);
@@ -11,9 +14,32 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
   // Mobile sub-tab state: 'tables' | 'menu' | 'cart'
   const [mobileSubTab, setMobileSubTab] = useState('tables');
 
+  // Touch Swipe Gesture coordinates
+  const [touchStart, setTouchStart] = useState(null);
+  const [touchEnd, setTouchEnd] = useState(null);
+  const minSwipeDistance = 70; // minimum pixels to count as swipe
+
+  useEffect(() => {
+    function onTakeawayCreated(newKey) {
+      setSelectedTable(newKey);
+      setMobileSubTab('menu');
+    }
+    socket.on('takeaway-created', onTakeawayCreated);
+    return () => {
+      socket.off('takeaway-created', onTakeawayCreated);
+    };
+  }, []);
+
+  const handleCreateTakeaway = () => {
+    socket.emit('create-takeaway');
+  };
+
   // Dynamic menu and tables from server state
   const menu = state.menu || [];
   const tables = Object.keys(state.tables || {});
+
+  // Fetch all active tables (which have orders and are not empty)
+  const activeTablesList = tables.filter(t => state.tables[t].items.length > 0);
 
   const getTableStatus = (tableName) => {
     return state.tables[tableName]?.status || 'empty';
@@ -95,15 +121,15 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
   const totalDraftAmount = activeDraftItems.reduce((sum, item) => sum + (item.price || 40000), 0);
   const totalAmount = totalSentAmount + totalDraftAmount;
 
-  const handlePayTable = () => {
-    if (!selectedTable) return;
-    const tableState = state.tables[selectedTable];
+  const handlePayTable = (tableName = selectedTable) => {
+    if (!tableName) return;
+    const tableState = state.tables[tableName];
     const totalSentItems = tableState?.items.length || 0;
 
     if (totalSentItems === 0) {
-      if ((draftItems[selectedTable] || []).length > 0) {
-        if (window.confirm('Bạn muốn hủy các món nháp chưa gửi bếp và làm trống bàn?')) {
-          setDraftItems(prev => ({ ...prev, [selectedTable]: [] }));
+      if ((draftItems[tableName] || []).length > 0) {
+        if (window.confirm(`Bạn muốn hủy các món nháp chưa gửi bếp và làm trống ${tableName}?`)) {
+          setDraftItems(prev => ({ ...prev, [tableName]: [] }));
         }
       } else {
         alert('Bàn này đang trống, không thể thanh toán!');
@@ -111,16 +137,88 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
       return;
     }
 
-    if (window.confirm(`Xác nhận thanh toán và giải phóng ${selectedTable}?\nTổng số tiền: ${totalSentAmount.toLocaleString('vi-VN')}đ`)) {
-      onClearTable(selectedTable);
-      setDraftItems(prev => ({ ...prev, [selectedTable]: [] }));
-      // Go back to table selection on mobile
-      setMobileSubTab('tables');
+    // Safety guard: only allow checkout if the kitchen has completed at least one dish (table status must be 'served')
+    if (tableState.status !== 'served') {
+      alert(`Không thể thanh toán ${tableName}!\nBàn này đang chờ nấu, chưa có món nào xong.`);
+      return;
+    }
+
+    const tableTotal = tableState.items.reduce((sum, item) => sum + (item.price || 40000), 0);
+    if (window.confirm(`Xác nhận thanh toán và giải phóng ${tableName}?\nTổng số tiền: ${tableTotal.toLocaleString('vi-VN')}đ`)) {
+      onClearTable(tableName);
+      setDraftItems(prev => ({ ...prev, [tableName]: [] }));
+      
+      // If we just paid the selected table, go back to tables list on mobile
+      if (tableName === selectedTable) {
+        setMobileSubTab('tables');
+      }
     }
   };
 
+  // Swipe Gestures Logic
+  const handleTouchStart = (e) => {
+    // Ignore swipe events in modal backdrop or forms
+    if (e.target.closest('.modal-backdrop') || e.target.closest('.custom-note-input') || e.target.closest('.admin-container')) return;
+    setTouchEnd(null);
+    setTouchStart({
+      x: e.targetTouches[0].clientX,
+      y: e.targetTouches[0].clientY
+    });
+  };
+
+  const handleTouchMove = (e) => {
+    if (!touchStart) return;
+    setTouchEnd({
+      x: e.targetTouches[0].clientX,
+      y: e.targetTouches[0].clientY
+    });
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distanceX = touchStart.x - touchEnd.x;
+    const distanceY = touchStart.y - touchEnd.y;
+    
+    // Ignore vertical scroll gestures to avoid interference
+    if (Math.abs(distanceY) > 55) {
+      setTouchStart(null);
+      setTouchEnd(null);
+      return;
+    }
+
+    // Optimized threshold (50px distance) and clean horizontal slope (1.5x of Y)
+    if (Math.abs(distanceX) > 50 && Math.abs(distanceX) > Math.abs(distanceY) * 1.5) {
+      if (distanceX > 0) {
+        // Swiped Left -> Go Next Tab
+        if (mobileSubTab === 'tables') {
+          if (selectedTable) {
+            setMobileSubTab('menu');
+          } else {
+            alert('Vui lòng chọn bàn trước khi chuyển sang chọn món!');
+          }
+        } else if (mobileSubTab === 'menu') {
+          setMobileSubTab('cart');
+        }
+      } else {
+        // Swiped Right -> Go Prev Tab
+        if (mobileSubTab === 'cart') {
+          setMobileSubTab('menu');
+        } else if (mobileSubTab === 'menu') {
+          setMobileSubTab('tables');
+        }
+      }
+    }
+    setTouchStart(null);
+    setTouchEnd(null);
+  };
+
   return (
-    <div className="order-screen-wrapper">
+    <div 
+      className="order-screen-wrapper"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
       {/* Mobile Sub-Navigation Bar (visible only on mobile) */}
       <div className="mobile-sub-nav">
         <button 
@@ -146,20 +244,13 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
         </button>
         <button 
           className={`sub-nav-btn ${mobileSubTab === 'cart' ? 'active' : ''}`}
-          onClick={() => {
-            if (!selectedTable) {
-              alert('Vui lòng chọn bàn trước!');
-              return;
-            }
-            setMobileSubTab('cart');
-          }}
-          disabled={!selectedTable}
+          onClick={() => setMobileSubTab('cart')}
         >
           <ShoppingCart size={16} />
           <span>3. Đơn Hàng</span>
-          {(activeSentItems.length + activeDraftItems.length) > 0 && (
+          {activeTablesList.length > 0 && (
             <span className="sub-nav-badge animate-pop">
-              {activeSentItems.length + activeDraftItems.length}
+              {activeTablesList.length} bàn
             </span>
           )}
         </button>
@@ -170,7 +261,8 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
         <div className={`panel card step-tables-panel ${mobileSubTab === 'tables' ? 'mobile-visible' : 'mobile-hidden'}`}>
           <h3 className="panel-title">Bước 1: Chọn Bàn / Hình thức</h3>
           <div className="table-btn-grid">
-            {tables.map(table => {
+            {/* 1. Physical Tables */}
+            {tables.filter(t => !t.startsWith('Mang Về ')).map(table => {
               const status = getTableStatus(table);
               const itemsCount = getTableItemsCount(table);
               const isSelected = selectedTable === table;
@@ -179,7 +271,6 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
               if (isSelected) btnClass += ' active';
               if (status === 'cooking') btnClass += ' status-cooking';
               if (status === 'served') btnClass += ' status-served';
-              if (table === 'Mang Về') btnClass += ' takeaway-btn';
 
               return (
                 <button
@@ -187,18 +278,62 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
                   className={btnClass}
                   onClick={() => handleSelectTable(table)}
                 >
-                  <span className="table-card-name">{table === 'Mang Về' ? '🛒 Mang Về' : table}</span>
+                  <span className="table-card-name">{table}</span>
                   {itemsCount > 0 && (
                     <span className="table-card-badge animate-pop">{itemsCount} món</span>
                   )}
                   {status !== 'empty' && (
                     <span className={`table-status-label ${status}`}>
-                      {status === 'cooking' ? '🔥 Đang làm' : '✅ Đã phục vụ'}
+                      {status === 'cooking' ? '🔥 Đang nấu' : '✅ Đang phục vụ'}
                     </span>
                   )}
                 </button>
               );
             })}
+
+            {/* 2. Active Takeaway Tickets */}
+            {tables.filter(t => t.startsWith('Mang Về ')).map(table => {
+              const status = getTableStatus(table);
+              const itemsCount = getTableItemsCount(table);
+              const isSelected = selectedTable === table;
+              
+              let btnClass = 'table-card-btn takeaway-btn';
+              if (isSelected) btnClass += ' active';
+              if (status === 'cooking') btnClass += ' status-cooking';
+              if (status === 'served') btnClass += ' status-served';
+
+              return (
+                <button
+                  key={table}
+                  className={btnClass}
+                  onClick={() => handleSelectTable(table)}
+                >
+                  <span className="table-card-name">🛒 {table}</span>
+                  {itemsCount > 0 && (
+                    <span className="table-card-badge animate-pop">{itemsCount} món</span>
+                  )}
+                  {status !== 'empty' && (
+                    <span className={`table-status-label ${status}`}>
+                      {status === 'cooking' ? '🔥 Đang nấu' : '✅ Đang phục vụ'}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {/* 3. Button to Create New Dynamic Takeaway Order */}
+            <button
+              className="table-card-btn add-takeaway-btn flex-center"
+              onClick={handleCreateTakeaway}
+              style={{
+                border: '2px dashed var(--primary)',
+                background: 'transparent',
+                color: 'var(--primary)',
+                cursor: 'pointer'
+              }}
+            >
+              <span className="table-card-name" style={{ fontWeight: 700 }}>➕ Mang Về Mới</span>
+            </button>
           </div>
         </div>
 
@@ -233,15 +368,15 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
 
         {/* Step 3: Cart & Billing details */}
         <div className={`panel card cart-sidebar step-cart-panel ${mobileSubTab === 'cart' ? 'mobile-visible' : 'mobile-hidden'}`}>
-          <h3 className="panel-title flex-between">
-            <span>🛒 Chi tiết đơn</span>
-            <span className="selected-table-label">
-              {selectedTable ? selectedTable : 'Chưa chọn bàn'}
-            </span>
-          </h3>
-
+          
           {selectedTable ? (
+            /* Selected Table Cart Detailed View */
             <div className="cart-wrapper">
+              <h3 className="panel-title flex-between" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8, marginBottom: 12 }}>
+                <span>🛒 Chi tiết đơn</span>
+                <span className="selected-table-label">{selectedTable}</span>
+              </h3>
+              
               <div className="cart-items-list">
                 {/* Sent items (cooking or served) */}
                 {activeSentItems.length > 0 && (
@@ -293,15 +428,15 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
                 )}
 
                 {activeSentItems.length === 0 && activeDraftItems.length === 0 && (
-                  <div className="empty-cart-state">
-                    <Info size={36} className="text-muted" />
+                  <div className="empty-cart-state" style={{ padding: '30px 10px' }}>
+                    <Info size={30} className="text-muted" />
                     <p>Bàn trống. Vui lòng chọn món trong thực đơn.</p>
                   </div>
                 )}
               </div>
 
               {/* Total and actions */}
-              <div className="cart-summary-section">
+              <div className="cart-summary-section" style={{ borderTop: '2px solid var(--border)' }}>
                 <div className="cart-total-row">
                   <span>Tổng cộng:</span>
                   <span className="total-price">{totalAmount.toLocaleString('vi-VN')}đ</span>
@@ -319,7 +454,7 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
                   
                   <button
                     className="btn-primary-payment flex-center gap-4"
-                    onClick={handlePayTable}
+                    onClick={() => handlePayTable()}
                     disabled={activeSentItems.length === 0 && activeDraftItems.length === 0}
                   >
                     <CreditCard size={18} />
@@ -329,11 +464,82 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
               </div>
             </div>
           ) : (
-            <div className="empty-cart-state">
-              <Info size={40} className="text-muted" />
-              <p>Vui lòng chọn bàn/hình thức đặt hàng trước để bắt đầu.</p>
+            /* Main bird's eye view when no table is active */
+            <div className="all-orders-birdseye flex-col-grow">
+              <h3 className="panel-title flex-between">
+                <span>📋 Danh Sách Bàn Có Đơn</span>
+                <span className="active-count-badge">{activeTablesList.length} bàn đang ngồi</span>
+              </h3>
+              
+              <div className="active-tables-scroller">
+                {activeTablesList.length === 0 ? (
+                  <div className="empty-cart-state" style={{ padding: '60px 20px' }}>
+                    <CheckCircle size={40} className="text-success" />
+                    <h4 style={{ color: 'var(--text-main)', marginTop: 12 }}>Tất cả các bàn trống</h4>
+                    <p style={{ fontSize: '0.85rem' }}>Chọn tab "Bàn" để mở bàn mới và ghi món ăn.</p>
+                  </div>
+                ) : (
+                  <div className="active-tables-flex-list">
+                    {activeTablesList.map(tableName => {
+                      const tableInfo = state.tables[tableName];
+                      const tableTotal = tableInfo.items.reduce((sum, item) => sum + (item.price || 40000), 0);
+                      const status = tableInfo.status;
+                      
+                      return (
+                        <div key={tableName} className={`active-table-mini-card ${status}`}>
+                          <div className="active-card-header flex-between">
+                            <div className="flex-center gap-4">
+                              <span className="active-card-name">{tableName}</span>
+                              <span className={`active-status-dot ${status}`}></span>
+                            </div>
+                            <span className="active-card-time">
+                              <Clock size={12} style={{ marginRight: 3 }} />
+                              {tableInfo.startTime}
+                            </span>
+                          </div>
+
+                          <div className="active-card-items-summary">
+                            {tableInfo.items.map((item, index) => (
+                              <div key={index} className="mini-item-row">
+                                <span className="mini-item-name">{item.name}</span>
+                                {item.notes && item.notes.length > 0 && (
+                                  <span className="mini-item-notes">({item.notes.join(', ')})</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="active-card-footer flex-between">
+                            <span className="active-card-total">
+                              Tổng: <strong>{tableTotal.toLocaleString('vi-VN')}đ</strong>
+                            </span>
+                            <button 
+                              className="btn-pay-mini flex-center gap-4"
+                              onClick={() => handlePayTable(tableName)}
+                            >
+                              <CreditCard size={14} />
+                              <span>Thanh Toán</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
+
+          {/* Quick toggle to show all unpaid tables summary even if a table is currently selected */}
+          {selectedTable && activeTablesList.length > 0 && (
+            <button 
+              className="btn-show-all-tables-summary"
+              onClick={() => setSelectedTable(null)}
+            >
+              Xem danh sách tất cả các bàn ({activeTablesList.length})
+            </button>
+          )}
+
         </div>
       </div>
 

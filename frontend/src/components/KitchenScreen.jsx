@@ -117,7 +117,7 @@ export default function KitchenScreen({ state, onToggleItem, onCompleteOrder, on
                   </button>
 
                   <button
-                    className={`btn-ticket-done flex-center gap-4 ${allChecked ? 'ready' : ''}`}
+                    className="btn-ticket-done flex-center gap-4 ready"
                     onClick={() => handleComplete(order.id)}
                   >
                     <Check size={18} />

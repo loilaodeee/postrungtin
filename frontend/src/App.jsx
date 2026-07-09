@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChefHat, ShoppingBag, BarChart3, Settings } from 'lucide-react';
+import { ChefHat, ShoppingBag, BarChart3, Settings, X } from 'lucide-react';
 import { socket } from './socket';
 import OrderScreen from './components/OrderScreen';
 import KitchenScreen from './components/KitchenScreen';
@@ -7,13 +7,57 @@ import StatsScreen from './components/StatsScreen';
 import AdminScreen from './components/AdminScreen';
 import './App.css';
 
-// Sound generator helper for served notification
-// Sound generator helper for served and new order notifications
+// Reusable global AudioContext for mobile web browsers to bypass gesture block
+let globalAudioCtx = null;
+
+const initAudio = () => {
+  if (globalAudioCtx) return;
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      globalAudioCtx = new AudioContextClass();
+      console.log('Global AudioContext initialized.');
+    }
+  } catch (err) {
+    console.error('Failed to initialize AudioContext:', err);
+  }
+};
+
+const resumeAudio = () => {
+  try {
+    initAudio();
+    const ctx = globalAudioCtx;
+    if (!ctx) return;
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => {
+        console.log('Global AudioContext resumed successfully.');
+      });
+    }
+
+    // Play a quick silent buffer. This is REQUIRED to unlock Web Audio on iOS Safari
+    // because iOS requires an actual audio source play start within a user gesture.
+    const buffer = ctx.createBuffer(1, 1, 22050);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start(0);
+    console.log('iOS Safari Audio unlocked successfully with silent buffer.');
+  } catch (error) {
+    console.error('Failed to resume/unlock audio context:', error);
+  }
+};
+
 const playSound = (type) => {
   try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
+    initAudio();
+    const ctx = globalAudioCtx;
+    if (!ctx) return;
+
+    // Force resume state if suspended
+    if (ctx.state === 'suspended') {
+      ctx.resume();
+    }
     
     if (type === 'new-order') {
       // Triple high-pitched urgent beeps at high volume (gain: 0.6)
@@ -71,6 +115,18 @@ function App() {
     history: []
   });
   const [isConnected, setIsConnected] = useState(socket.connected);
+  const [toasts, setToasts] = useState([]);
+
+  const triggerToast = (title, message, type) => {
+    const id = Date.now() + Math.random().toString(36).substr(2, 5);
+    const newToast = { id, title, message, type };
+    setToasts(prev => [...prev, newToast]);
+
+    // Auto-remove after 4.5 seconds to sync with slideUp animation
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4500);
+  };
 
   useEffect(() => {
     // Connect socket on mount
@@ -99,18 +155,18 @@ function App() {
           body: `${tableName} vừa gửi đơn lúc ${time}!`
         });
       }
+      triggerToast('🔥 Đơn Hàng Mới', `${tableName} vừa gửi đơn lúc ${time}!`, 'order');
     }
 
     function onOrderServed({ tableName }) {
       console.log(`Order served for ${tableName}!`);
-      // Trigger notification bell globally
       playSound('served');
-      // Show desktop alert notification if permitted
       if (Notification.permission === 'granted') {
         new Notification('🔔 Đơn hàng hoàn thành', {
           body: `${tableName} đã chế biến xong! Vui lòng giao món.`
         });
       }
+      triggerToast('🔔 Đơn Hàng Hoàn Thành', `${tableName} đã chế biến xong! Vui lòng giao món.`, 'served');
     }
 
     socket.on('connect', onConnect);
@@ -130,6 +186,19 @@ function App() {
       socket.off('state-update', onStateUpdate);
       socket.off('new-kitchen-order', onNewKitchenOrder);
       socket.off('order-served', onOrderServed);
+    };
+  }, []);
+
+  // Unlock audio context on user gesture for mobile devices
+  useEffect(() => {
+    const handleGesture = () => {
+      resumeAudio();
+    };
+    window.addEventListener('click', handleGesture);
+    window.addEventListener('touchstart', handleGesture);
+    return () => {
+      window.removeEventListener('click', handleGesture);
+      window.removeEventListener('touchstart', handleGesture);
     };
   }, []);
 
@@ -157,7 +226,7 @@ function App() {
   const activeKitchenCount = systemState.kitchenOrders?.length || 0;
 
   return (
-    <div className="app-root">
+    <div className="app-root" onClick={resumeAudio} onTouchStart={resumeAudio}>
       <header className="app-header">
         <div className="brand-section">
           <div className="brand-icon">
@@ -206,7 +275,26 @@ function App() {
           </button>
         </nav>
         
-        <div className="connection-status-indicator">
+        <div className="connection-status-indicator" style={{ display: 'flex', alignItems: 'center' }}>
+          <a 
+            href="https://drive.google.com/file/d/1V6h7ErUMSp5xewp1xgt0ruWmcbuluri0/view?usp=sharing" 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="btn-download-app" 
+            style={{ 
+              marginRight: '16px', 
+              textDecoration: 'none', 
+              color: '#3b82f6', 
+              fontWeight: '800', 
+              fontSize: '13px', 
+              backgroundColor: '#eff6ff',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              border: '1px solid #bfdbfe'
+            }}
+          >
+            📥 Tải App
+          </a>
           <span 
             className={`status-dot ${isConnected ? 'online' : 'offline'}`}
             title={isConnected ? 'Đang kết nối thời gian thực' : 'Mất kết nối server'}
@@ -261,6 +349,24 @@ function App() {
           <AdminScreen state={systemState} />
         )}
       </main>
+
+      {/* Custom In-App Toast Banner Notifications (drops from top like native push) */}
+      <div className="toasts-container">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast-card-banner animate-slide-down ${t.type}`}>
+            <div className="toast-icon-box">
+              {t.type === 'order' ? <ChefHat size={20} /> : <BarChart3 size={20} />}
+            </div>
+            <div className="toast-content-box">
+              <h4 className="toast-title">{t.title}</h4>
+              <p className="toast-message">{t.message}</p>
+            </div>
+            <button className="btn-toast-close" onClick={() => setToasts(prev => prev.filter(item => item.id !== t.id))}>
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -1272,14 +1272,33 @@ body {
   .modal-backdrop {
     align-items: flex-end;
     padding: 0;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
   }
 
   .modal-content {
     max-width: 100%;
+    max-height: 80vh; /* Limit height so it fits the viewport */
     margin-top: auto; /* Slide up from bottom on mobile */
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
     animation: slideUp 0.25s ease-out;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-body {
+    overflow-y: auto; /* Scrollable list of chips and input */
+    flex-grow: 1;
+    padding: 16px 20px;
+  }
+
+  .modal-footer {
+    flex-shrink: 0;
+    padding: 12px 20px;
   }
 
   @keyframes slideUp {
@@ -1354,5 +1373,320 @@ body {
     top: 108px !important;
   }
 }
+
+/* -------------------------------------------------------------
+   IN-APP TOAST BANNER SYSTEM (iOS/Android Push Replication)
+------------------------------------------------------------- */
+.toasts-container {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 92%;
+  max-width: 400px;
+  pointer-events: none; /* Let clicks pass through if empty */
+}
+
+.toast-card-banner {
+  pointer-events: auto; /* Allow clicking close button */
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 16px -6px rgba(0, 0, 0, 0.1);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+  border-left: 5px solid var(--primary);
+  width: 100%;
+}
+
+.toast-card-banner.order {
+  border-left-color: var(--warning);
+}
+
+.toast-card-banner.served {
+  border-left-color: var(--success);
+}
+
+.toast-icon-box {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: var(--primary-light);
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.toast-card-banner.order .toast-icon-box {
+  background-color: var(--warning-light);
+  color: var(--warning-dark);
+}
+
+.toast-card-banner.served .toast-icon-box {
+  background-color: var(--success-light);
+  color: var(--success-dark);
+}
+
+.toast-content-box {
+  flex-grow: 1;
+  text-align: left;
+}
+
+.toast-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.toast-message {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.btn-toast-close {
+  background: transparent;
+  border: none;
+  color: var(--text-light);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition-fast);
+}
+
+.btn-toast-close:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+  color: var(--text-main);
+}
+
+/* Slide Down Animation with Auto Fade Out & Collapse */
+.animate-slide-down {
+  animation: slideDownFade 4.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideDownFade {
+  0% {
+    transform: translateY(-40px);
+    opacity: 0;
+  }
+  8% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  90% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-40px);
+    opacity: 0;
+    margin-top: -64px; /* collapse space */
+  }
+}
+
+/* -------------------------------------------------------------
+   ACTIVE TABLES BIRDSEYE DASHBOARD VIEW (CART SIDEBAR)
+------------------------------------------------------------- */
+.all-orders-birdseye {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  height: 100%;
+}
+
+.active-count-badge {
+  font-size: 0.78rem;
+  background-color: var(--primary-light);
+  color: var(--primary);
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: 600;
+}
+
+.active-tables-scroller {
+  flex-grow: 1;
+  overflow-y: auto;
+  margin-top: 12px;
+  padding-right: 4px;
+}
+
+.active-tables-flex-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 20px;
+}
+
+.active-table-mini-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  border-left: 5px solid var(--text-light);
+}
+
+.active-table-mini-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.active-table-mini-card.cooking {
+  border-left-color: var(--warning);
+}
+
+.active-table-mini-card.served {
+  border-left-color: var(--success);
+}
+
+.active-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.active-card-name {
+  font-weight: 700;
+  font-size: 0.98rem;
+  color: var(--text-main);
+}
+
+.active-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.active-status-dot.cooking {
+  background-color: var(--warning);
+  box-shadow: 0 0 8px var(--warning);
+}
+
+.active-status-dot.served {
+  background-color: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+.active-card-time {
+  display: flex;
+  align-items: center;
+  font-size: 0.74rem;
+  color: var(--text-light);
+}
+
+.active-card-items-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  text-align: left;
+}
+
+.mini-item-row {
+  font-size: 0.82rem;
+  color: var(--text-main);
+  line-height: 1.3;
+}
+
+.mini-item-name {
+  font-weight: 500;
+}
+
+.mini-item-notes {
+  font-size: 0.76rem;
+  color: var(--warning-dark);
+  margin-left: 4px;
+  font-style: italic;
+}
+
+.active-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.active-card-total {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.active-card-total strong {
+  font-size: 1rem;
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.btn-pay-mini {
+  background-color: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.btn-pay-mini:hover {
+  background-color: var(--primary-dark);
+}
+
+.btn-show-all-tables-summary {
+  background: transparent;
+  color: var(--primary);
+  border: 1px dashed var(--primary);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-top: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.btn-show-all-tables-summary:hover {
+  background-color: var(--primary-light);
+}
+
+.flex-col-grow {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+
+/* Fix scroller height for mobile list view */
+@media (max-width: 768px) {
+  .active-tables-scroller {
+    max-height: calc(100vh - 250px);
+  }
+}
+
+
 
 

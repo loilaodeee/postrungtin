@@ -119,7 +119,7 @@ export default function AdminScreen({ state }) {
                     <div className="admin-row-info">
                       <strong>{table}</strong>
                       <span className={`admin-status-badge ${tableInfo.status}`} style={{ marginLeft: 8 }}>
-                        {tableInfo.status === 'empty' ? 'Trống' : tableInfo.status === 'cooking' ? 'Đang nấu' : 'Đã phục vụ'}
+                        {tableInfo.status === 'empty' ? 'Trống' : tableInfo.status === 'cooking' ? 'Đang nấu' : 'Đang phục vụ'}
                       </span>
                     </div>
                     <button

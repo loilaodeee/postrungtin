@@ -1,7 +1,12 @@
 node_modules/
 frontend/node_modules/
+mobile/node_modules/
 frontend/dist/
-backend/data/state.json
+backend/data/
 .env
 .DS_Store
 Thumbs.db
+*.apk
+**/*.apk
+.gradle/
+build/
