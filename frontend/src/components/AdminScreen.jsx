@@ -12,6 +12,11 @@ export default function AdminScreen({ state }) {
   const [editingName, setEditingName] = useState('');
   const [editingPrice, setEditingPrice] = useState('');
 
+  // Note Manager States
+  const [newNoteText, setNewNoteText] = useState('');
+  const [editingNoteText, setEditingNoteText] = useState(null); // old text
+  const [editingNoteValue, setEditingNoteValue] = useState(''); // new text
+
   const menu = state.menu || [];
   const tables = Object.keys(state.tables || {});
 
@@ -70,6 +75,38 @@ export default function AdminScreen({ state }) {
       price: Number(editingPrice)
     });
     setEditingItemId(null);
+  };
+
+  // Note Handlers
+  const handleAddNote = (e) => {
+    e.preventDefault();
+    if (!newNoteText.trim()) return;
+    socket.emit('admin-add-quick-note', newNoteText);
+    setNewNoteText('');
+  };
+
+  const handleDeleteNote = (noteText) => {
+    if (window.confirm(`Bạn chắc chắn muốn xóa ghi chú "${noteText}" khỏi danh sách gợi ý?`)) {
+      socket.emit('admin-delete-quick-note', noteText);
+    }
+  };
+
+  const startEditNote = (noteText) => {
+    setEditingNoteText(noteText);
+    setEditingNoteValue(noteText);
+  };
+
+  const cancelEditNote = () => {
+    setEditingNoteText(null);
+  };
+
+  const saveEditNote = (oldNoteText) => {
+    if (!editingNoteValue.trim()) return;
+    socket.emit('admin-edit-quick-note', {
+      oldNote: oldNoteText,
+      newNote: editingNoteValue
+    });
+    setEditingNoteText(null);
   };
 
   return (
@@ -238,8 +275,99 @@ export default function AdminScreen({ state }) {
             )}
           </div>
         </div>
+
+        {/* Note Manager Panel */}
+        <div className="stats-panel card">
+          <h3 className="panel-title">✍️ Quản Lý Ghi Chú Món Ăn</h3>
+          
+          {/* Add Note Form */}
+          <form className="admin-form-row" onSubmit={handleAddNote}>
+            <input
+              type="text"
+              className="custom-note-input"
+              value={newNoteText}
+              onChange={(e) => setNewNoteText(e.target.value)}
+              placeholder="Ghi chú gợi ý mới (Ví dụ: Ít béo, nhiều hành...)"
+              required
+            />
+            <button type="submit" className="btn-primary flex-center gap-4" style={{ whiteSpace: 'nowrap' }}>
+              <Plus size={18} />
+              <span>Thêm</span>
+            </button>
+          </form>
+
+          {/* Notes List */}
+          <div className="admin-items-list" style={{ marginTop: 16 }}>
+            {(!state.quickNotes || state.quickNotes.length === 0) ? (
+              <p className="no-data-text">Chưa có ghi chú nào được cấu hình.</p>
+            ) : (
+              state.quickNotes.map(note => {
+                const isEditing = editingNoteText === note;
+                return (
+                  <div key={note} className="admin-list-row flex-between">
+                    {isEditing ? (
+                      /* Editing View */
+                      <div className="admin-row-edit-form">
+                        <input
+                          type="text"
+                          className="custom-note-input inline-edit"
+                          value={editingNoteValue}
+                          onChange={(e) => setEditingNoteValue(e.target.value)}
+                          required
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveEditNote(note);
+                          }}
+                        />
+                        <div className="edit-actions-group">
+                          <button className="btn-icon-success" onClick={() => saveEditNote(note)}>
+                            <Check size={16} />
+                          </button>
+                          <button className="btn-icon-secondary" onClick={cancelEditNote}>
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Display View */
+                      <>
+                        <div className="admin-row-info">
+                          <strong>{note}</strong>
+                        </div>
+                        <div className="admin-row-actions">
+                          <button
+                            className="btn-icon-primary"
+                            onClick={() => startEditNote(note)}
+                            title="Sửa ghi chú"
+                            style={{ marginRight: 8 }}
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                          <button
+                            className="btn-icon-danger"
+                            onClick={() => handleDeleteNote(note)}
+                            title="Xóa ghi chú"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
       </div>
       <style>{`
+        .stats-main-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+          gap: 20px;
+          margin-bottom: 20px;
+        }
         .admin-form-row {
           display: flex;
           gap: 8px;

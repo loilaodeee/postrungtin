@@ -549,6 +549,7 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
         onClose={() => setIsNoteModalOpen(false)}
         onConfirm={handleConfirmNotes}
         foodName={pendingFood ? pendingFood.name : ''}
+        quickNotes={state.quickNotes || []}
       />
     </div>
   );

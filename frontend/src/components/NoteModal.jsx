@@ -13,7 +13,7 @@ const QUICK_NOTES = [
   'Mì mềm'
 ];
 
-export default function NoteModal({ isOpen, onClose, onConfirm, foodName }) {
+export default function NoteModal({ isOpen, onClose, onConfirm, foodName, quickNotes = [] }) {
   const [selectedChips, setSelectedChips] = useState([]);
   const [customText, setCustomText] = useState('');
 
@@ -60,7 +60,7 @@ export default function NoteModal({ isOpen, onClose, onConfirm, foodName }) {
         <div className="modal-body">
           <label className="input-label">Chọn nhanh ghi chú:</label>
           <div className="note-chips-grid">
-            {QUICK_NOTES.map(chip => {
+            {(quickNotes.length > 0 ? quickNotes : QUICK_NOTES).map(chip => {
               const isSelected = selectedChips.includes(chip);
               return (
                 <button

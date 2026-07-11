@@ -203,6 +203,18 @@ const defaultMenu = [
   { id: '8', name: 'Mì gói khô', price: 40000 }
 ];
 
+const defaultQuickNotes = [
+  'Không hành',
+  'Không giá',
+  'Không tóp mỡ',
+  'Nhiều tóp mỡ',
+  'Nước béo',
+  'Nước trong',
+  'Nhiều thịt',
+  'Mì dai',
+  'Mì mềm'
+];
+
 const initialTables = {
   "Bàn 1": { items: [], startTime: null, status: 'empty' },
   "Bàn 2": { items: [], startTime: null, status: 'empty' },
@@ -215,6 +227,7 @@ const initialTables = {
 let state = {
   tables: { ...initialTables },
   menu: [...defaultMenu],
+  quickNotes: [...defaultQuickNotes],
   kitchenOrders: [], // Active orders currently in the kitchen
   history: []       // Completed historical transactions
 };
@@ -234,6 +247,7 @@ async function loadState() {
         }
         
         state.menu = loaded.menu || [...defaultMenu];
+        state.quickNotes = loaded.quickNotes || [...defaultQuickNotes];
         state.kitchenOrders = loaded.kitchenOrders || [];
         state.history = loaded.history || [];
         console.log('State loaded successfully from database.');
@@ -257,6 +271,7 @@ async function loadState() {
         }
         
         state.menu = loaded.menu || [...defaultMenu];
+        state.quickNotes = loaded.quickNotes || [...defaultQuickNotes];
         state.kitchenOrders = loaded.kitchenOrders || [];
         state.history = loaded.history || [];
         console.log('State loaded successfully from file.');
@@ -546,9 +561,40 @@ io.on('connection', (socket) => {
       "Bàn 6": { items: [], startTime: null, status: 'empty' }
     };
     state.menu = [...defaultMenu];
+    state.quickNotes = [...defaultQuickNotes];
     state.kitchenOrders = [];
     saveState();
     io.emit('state-update', state);
+  });
+
+  // Admin: Add quick note
+  socket.on('admin-add-quick-note', (noteText) => {
+    const trimmed = noteText ? noteText.trim() : '';
+    if (trimmed && !state.quickNotes.includes(trimmed)) {
+      state.quickNotes.push(trimmed);
+      saveState();
+      io.emit('state-update', state);
+    }
+  });
+
+  // Admin: Delete quick note
+  socket.on('admin-delete-quick-note', (noteText) => {
+    state.quickNotes = state.quickNotes.filter(n => n !== noteText);
+    saveState();
+    io.emit('state-update', state);
+  });
+
+  // Admin: Edit quick note
+  socket.on('admin-edit-quick-note', ({ oldNote, newNote }) => {
+    const trimmedNew = newNote ? newNote.trim() : '';
+    if (trimmedNew && oldNote) {
+      const idx = state.quickNotes.indexOf(oldNote);
+      if (idx !== -1) {
+        state.quickNotes[idx] = trimmedNew;
+        saveState();
+        io.emit('state-update', state);
+      }
+    }
   });
 
   // Admin: Add menu item
