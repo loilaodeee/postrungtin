@@ -277,7 +277,7 @@ function App() {
         
         <div className="connection-status-indicator" style={{ display: 'flex', alignItems: 'center' }}>
           <a 
-            href="https://drive.google.com/file/d/1xSqwK2shrTQEhU6BbaKUnT7ZPAUQIA9P/view?usp=sharing" 
+            href="https://drive.google.com/file/d/1zPxe1tQGYtlmX4oOdq6f0UsGN385YSY_/view?usp=sharing" 
             target="_blank" 
             rel="noopener noreferrer" 
             className="btn-download-app" 
