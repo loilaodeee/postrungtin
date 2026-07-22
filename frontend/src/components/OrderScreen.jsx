@@ -75,10 +75,14 @@ export default function OrderScreen({ state, onPlaceOrder, onClearTable }) {
       notes: notes
     };
 
-    setDraftItems(prev => ({
-      ...prev,
-      [selectedTable]: [...(prev[selectedTable] || []), newItem]
-    }));
+    setDraftItems(prev => {
+      const newList = [...(prev[selectedTable] || []), newItem];
+      newList.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+      return {
+        ...prev,
+        [selectedTable]: newList
+      };
+    });
   };
 
   const handleRemoveDraftItem = (index) => {

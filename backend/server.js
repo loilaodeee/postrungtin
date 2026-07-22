@@ -389,10 +389,10 @@ io.on('connection', (socket) => {
     }
     table.status = 'cooking';
     
-    // Add items to table order
-    table.items = [...table.items, ...items];
+    // Add items to table order (sorted alphabetically by food name)
+    table.items = [...table.items, ...items].sort((a, b) => a.name.localeCompare(b.name, 'vi'));
     
-    // Create new kitchen ticket
+    // Create new kitchen ticket (sorted alphabetically by food name)
     const newKitchenOrder = {
       id: Date.now() + Math.random().toString(36).substr(2, 5), // unique ticket ID
       tableName,
@@ -401,7 +401,7 @@ io.on('connection', (socket) => {
       items: items.map(item => ({
         ...item,
         completed: false // individual checklist
-      })),
+      })).sort((a, b) => a.name.localeCompare(b.name, 'vi')),
       status: 'cooking'
     };
     
