@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { ChefHat, ShoppingBag, BarChart3, Settings, X } from 'lucide-react';
+import { ChefHat, ShoppingBag, BarChart3, Settings, X, MessageSquare } from 'lucide-react';
 import { socket } from './socket';
 import OrderScreen from './components/OrderScreen';
 import KitchenScreen from './components/KitchenScreen';
 import StatsScreen from './components/StatsScreen';
 import AdminScreen from './components/AdminScreen';
+import ChatScreen from './components/ChatScreen';
 import './App.css';
 
 // Reusable global AudioContext for mobile web browsers to bypass gesture block
@@ -267,6 +268,14 @@ function App() {
           </button>
 
           <button
+            className={`nav-tab-btn ${activeTab === 'social' ? 'active' : ''}`}
+            onClick={() => setActiveTab('social')}
+          >
+            <MessageSquare size={18} />
+            <span>Trò Chuyện</span>
+          </button>
+
+          <button
             className={`nav-tab-btn ${activeTab === 'admin' ? 'active' : ''}`}
             onClick={() => setActiveTab('admin')}
           >
@@ -343,6 +352,10 @@ function App() {
         
         {activeTab === 'stats' && (
           <StatsScreen />
+        )}
+
+        {activeTab === 'social' && (
+          <ChatScreen />
         )}
 
         {activeTab === 'admin' && (
