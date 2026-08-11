@@ -6,6 +6,12 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
+
+// Temporary debug logger for routing diagnosis
+app.use((req, res, next) => {
+  console.log(`[DEBUG REQUEST] Method: ${req.method}, Path: ${req.path}, URL: ${req.url}`);
+  next();
+});
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
