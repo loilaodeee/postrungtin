@@ -336,10 +336,10 @@ export default function ChatScreen() {
         <div className="auth-chat-card animate-pop">
           <div className="auth-chat-header flex-center gap-8">
             <Sparkles size={28} className="text-primary animate-pulse" />
-            <h2>Trung Tín Social</h2>
+            <h2>Tín Trung Trung Tình</h2>
           </div>
           
-          <p className="auth-chat-subtitle">Kết nối nội bộ, trò chuyện thời gian thực</p>
+          <p className="auth-chat-subtitle">Chat Online</p>
 
           <form onSubmit={handleAuth} className="auth-chat-form">
             {isRegister && (
@@ -347,7 +347,7 @@ export default function ChatScreen() {
                 <label>Tên hiển thị</label>
                 <input
                   type="text"
-                  placeholder="Ví dụ: Lợi Phục Vụ, Hân Đầu Bếp"
+                  placeholder="Ví dụ: Lợi đẹp trai, Tín độc thân"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   required

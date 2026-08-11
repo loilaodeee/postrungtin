@@ -405,13 +405,13 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={styles.authCard}>
-          <Text style={styles.authTitle}>✨ Trung Tín Social</Text>
-          <Text style={styles.authSubtitle}>Kết nối nội bộ, trò chuyện thời gian thực</Text>
+          <Text style={styles.authTitle}>✨ Tín Trung Trung Tình</Text>
+          <Text style={styles.authSubtitle}>Chat Online</Text>
 
           {isRegister && (
             <TextInput
               style={styles.authInput}
-              placeholder="Tên hiển thị (Ví dụ: Lợi Phục Vụ)"
+              placeholder="Tên hiển thị (Ví dụ: Lợi đẹp trai, Tín độc thân)"
               placeholderTextColor="#94a3b8"
               value={displayName}
               onChangeText={setDisplayName}
