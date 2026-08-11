@@ -29,14 +29,14 @@ export default function ChatScreen() {
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
-  const CHAT_SERVER_URL = `http://${window.location.hostname}:3006`;
+  const CHAT_SERVER_URL = `http://${window.location.hostname}/chat`;
 
   // 1. Establish Socket Connection and Listeners
   useEffect(() => {
     if (!token) return;
 
-    // Connect to Chat Server Socket
-    const socket = io(CHAT_SERVER_URL, {
+    // Connect to Chat Namespace on Port 80
+    const socket = io(`http://${window.location.hostname}/chat`, {
       auth: { token }
     });
 

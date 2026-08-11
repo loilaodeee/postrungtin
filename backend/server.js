@@ -662,6 +662,15 @@ io.on('connection', (socket) => {
   await loadFcmTokens();
   await loadState();
 
+  // Setup integrated Chat & Social module running on the same HTTP/Socket port (port 80)
+  try {
+    const setupChat = require('./chat');
+    setupChat(app, io);
+    console.log('Chat module loaded and integrated on port 80.');
+  } catch (err) {
+    console.error('Failed to load chat module:', err);
+  }
+
   server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
   });

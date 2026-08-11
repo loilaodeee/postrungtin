@@ -46,14 +46,7 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
 
   // Parse Chat Server URL dynamically from POS Socket URL
   const CHAT_SERVER_URL = useMemo(() => {
-    try {
-      const match = socketUrl.match(/^(https?:\/\/)?([^:\/\s]+)/);
-      const host = match ? match[2] : '213.163.198.118';
-      const protocol = socketUrl.startsWith('https') ? 'https:' : 'http:';
-      return `${protocol}//${host}:3006`;
-    } catch (e) {
-      return 'http://213.163.198.118:3006';
-    }
+    return `${socketUrl}/chat`;
   }, [socketUrl]);
 
   // Load Saved Auth on Mount
