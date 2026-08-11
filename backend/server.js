@@ -307,6 +307,15 @@ async function saveState() {
 app.use(cors());
 app.use(express.json());
 
+// Setup integrated Chat & Social module running on the same HTTP/Socket port (port 80)
+try {
+  const setupChat = require('./chat');
+  setupChat(app, io);
+  console.log('Chat module loaded and integrated on port 80.');
+} catch (err) {
+  console.error('Failed to load chat module:', err);
+}
+
 // Serve React production build static assets if exists
 const buildPath = path.join(__dirname, '..', 'frontend', 'dist');
 if (fs.existsSync(buildPath)) {
@@ -315,7 +324,7 @@ if (fs.existsSync(buildPath)) {
   
   // SPA routing: send index.html for all non-API requests
   app.get('*', (req, res, next) => {
-    if (req.url.startsWith('/api') || req.url.startsWith('/socket.io')) {
+    if (req.url.startsWith('/api') || req.url.startsWith('/socket.io') || req.url.startsWith('/chat')) {
       return next();
     }
     res.sendFile(path.join(buildPath, 'index.html'));
@@ -661,15 +670,6 @@ io.on('connection', (socket) => {
   await initDatabase();
   await loadFcmTokens();
   await loadState();
-
-  // Setup integrated Chat & Social module running on the same HTTP/Socket port (port 80)
-  try {
-    const setupChat = require('./chat');
-    setupChat(app, io);
-    console.log('Chat module loaded and integrated on port 80.');
-  } catch (err) {
-    console.error('Failed to load chat module:', err);
-  }
 
   server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
