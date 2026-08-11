@@ -11,10 +11,24 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator
+  ActivityIndicator,
+  Image
 } from 'react-native';
 import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const STICKERS = [
+  { code: '🍜', label: 'Hủ tiếu' },
+  { code: '🥟', label: 'Sủi cảo' },
+  { code: '🍢', label: 'Xiên que' },
+  { code: '🥤', label: 'Trà sữa' },
+  { code: '🍦', label: 'Kem' },
+  { code: '🍰', label: 'Bánh ngọt' },
+  { code: '🍺', label: 'Bia' },
+  { code: '🍟', label: 'Khoai tây' }
+];
+
+const EMOJIS = ['😀', '😂', '😍', '👍', '🎉', '🍜', '🥟', '🥤', '🔥', '❤️', '👏', '😭'];
 
 export default function ChatScreen({ socketUrl, fcmToken }) {
   const [token, setToken] = useState('');
@@ -40,11 +54,19 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
   const [friendTyping, setFriendTyping] = useState(false);
   const [localTyping, setLocalTyping] = useState(false);
 
+  // Panels
+  const [showEmojiPanel, setShowEmojiPanel] = useState(false);
+  const [showStickerPanel, setShowStickerPanel] = useState(false);
+  
+  // Media URL Input Modal (To avoid native library compilation errors, we allow sending direct media URLs)
+  const [showMediaModal, setShowMediaModal] = useState(false);
+  const [mediaUrlInput, setMediaUrlInput] = useState('');
+  const [mediaTypeInput, setMediaTypeInput] = useState('image'); // 'image' | 'video'
+
   const socketRef = useRef(null);
   const flatListRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
-  // Parse Chat Server URL dynamically from POS Socket URL
   const CHAT_SERVER_URL = useMemo(() => {
     return `${socketUrl}/chat`;
   }, [socketUrl]);
@@ -80,18 +102,20 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
 
     socket.on('connect', () => {
       console.log('Connected to Chat Socket Server');
-      // Register Firebase Cloud Messaging token to receive push notifications
       if (fcmToken) {
         socket.emit('register-fcm-token', fcmToken);
       }
     });
 
     socket.on('private-message', (msg) => {
-      if (
-        (activeFriend && msg.sender_id === activeFriend.id) ||
-        msg.sender_id === user.id
-      ) {
+      const isFromActiveFriend = activeFriend && msg.sender_id === activeFriend.id;
+      const isSentByMe = msg.sender_id === user.id;
+
+      if (isFromActiveFriend || isSentByMe) {
         setMessages((prev) => [...prev, msg]);
+        if (isFromActiveFriend) {
+          markMessagesAsRead(activeFriend.id);
+        }
       }
       fetchFriendsList();
     });
@@ -122,6 +146,14 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
       fetchFriendsList();
     });
 
+    socket.on('messages-read', ({ readerId }) => {
+      if (activeFriend && readerId === activeFriend.id) {
+        setMessages((prev) =>
+          prev.map((m) => (m.receiver_id === readerId ? { ...m, is_read: true } : m))
+        );
+      }
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -138,13 +170,32 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
   useEffect(() => {
     if (activeFriend) {
       fetchMessageHistory();
+      markMessagesAsRead(activeFriend.id);
       setFriendTyping(false);
+      setShowEmojiPanel(false);
+      setShowStickerPanel(false);
     } else {
       setMessages([]);
     }
   }, [activeFriend]);
 
-  // REST API: Get friends & requests
+  // REST API: Mark as read
+  const markMessagesAsRead = async (friendId) => {
+    try {
+      await fetch(`${CHAT_SERVER_URL}/messages/read`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ friendId })
+      });
+    } catch (err) {
+      console.error('Error marking read on mobile:', err);
+    }
+  };
+
+  // REST API: Get friends
   const fetchFriendsList = async () => {
     try {
       const res = await fetch(`${CHAT_SERVER_URL}/friends/list`, {
@@ -171,6 +222,7 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
       const data = await res.json();
       if (!data.error) {
         setMessages(data);
+        fetchFriendsList(); // Refresh friends list to clear unread counts locally
       }
     } catch (err) {
       console.error('Fetch message history error:', err);
@@ -305,7 +357,7 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
     }
   };
 
-  // Friendship: Delete friendship or reject invitation
+  // Friendship: Delete friendship
   const handleDeleteFriend = async (friendId, name) => {
     Alert.alert('Hủy kết bạn', `Bạn có chắc muốn hủy kết bạn/hủy lời mời với ${name}?`, [
       { text: 'Quay lại', style: 'cancel' },
@@ -354,32 +406,118 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
     }, 1500);
   };
 
-  // Messaging: Send message
+  // Messaging: Send text message
   const handleSendMessage = () => {
     if (!inputText.trim() || !activeFriend || !socketRef.current) return;
 
     socketRef.current.emit('private-message', {
       receiverId: activeFriend.id,
-      content: inputText.trim()
+      content: inputText.trim(),
+      media_type: 'text'
     });
 
-    setInputText('');
-    setLocalTyping(false);
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    socketRef.current.emit('stop-typing', { receiverId: activeFriend.id });
-
-    // Local echo for instant response
     const echoMsg = {
       id: Date.now().toString(),
       sender_id: user.id,
       receiver_id: activeFriend.id,
       content: inputText.trim(),
+      media_type: 'text',
       created_at: new Date().toISOString()
     };
     setMessages((prev) => [...prev, echoMsg]);
+
+    setInputText('');
+    setLocalTyping(false);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    socketRef.current.emit('stop-typing', { receiverId: activeFriend.id });
   };
 
-  // Show Loading indicator during startup check
+  // Messaging: Send Sticker
+  const handleSendSticker = (stickerCode) => {
+    if (!activeFriend || !socketRef.current) return;
+
+    socketRef.current.emit('private-message', {
+      receiverId: activeFriend.id,
+      content: stickerCode,
+      media_type: 'sticker'
+    });
+
+    const echoMsg = {
+      id: Date.now().toString(),
+      sender_id: user.id,
+      receiver_id: activeFriend.id,
+      content: stickerCode,
+      media_type: 'sticker',
+      created_at: new Date().toISOString()
+    };
+    setMessages((prev) => [...prev, echoMsg]);
+    setShowStickerPanel(false);
+  };
+
+  // Messaging: Send Media URL (Direct Link to image or video)
+  const handleSendMediaUrl = () => {
+    if (!mediaUrlInput.trim() || !activeFriend || !socketRef.current) return;
+
+    socketRef.current.emit('private-message', {
+      receiverId: activeFriend.id,
+      content: mediaUrlInput.trim(),
+      media_type: mediaTypeInput
+    });
+
+    const echoMsg = {
+      id: Date.now().toString(),
+      sender_id: user.id,
+      receiver_id: activeFriend.id,
+      content: mediaUrlInput.trim(),
+      media_type: mediaTypeInput,
+      created_at: new Date().toISOString()
+    };
+    setMessages((prev) => [...prev, echoMsg]);
+
+    setMediaUrlInput('');
+    setShowMediaModal(false);
+  };
+
+  // Activity Status Formatting
+  const formatActivityStatus = (friend) => {
+    if (friend.status === 'online') {
+      return '🟢 Đang hoạt động';
+    }
+    if (!friend.last_seen) {
+      return '⚫ Ngoại tuyến';
+    }
+    
+    const diffMs = Date.now() - new Date(friend.last_seen).getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return '⚫ Vừa hoạt động';
+    if (diffMins < 60) return `⚫ Hoạt động ${diffMins} phút trước`;
+    if (diffHours < 24) return `⚫ Hoạt động ${diffHours} giờ trước`;
+    return `⚫ Hoạt động ${diffDays} ngày trước`;
+  };
+
+  // Message Preview Formatting
+  const renderLastMessagePreview = (friend) => {
+    const lm = friend.last_message;
+    if (!lm) return 'Hãy bắt đầu trò chuyện';
+
+    const isSelf = lm.sender_id === user.id;
+    const prefix = isSelf ? 'Bạn: ' : '';
+    
+    let contentPreview = lm.content;
+    if (lm.media_type === 'image') contentPreview = '📷 Đã gửi một ảnh';
+    else if (lm.media_type === 'video') contentPreview = '🎥 Đã gửi một video';
+    else if (lm.media_type === 'sticker') contentPreview = `🥟 Sticker ${lm.content}`;
+
+    if (contentPreview.length > 20) {
+      contentPreview = contentPreview.substring(0, 20) + '...';
+    }
+
+    return `${prefix}${contentPreview}`;
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -544,7 +682,7 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
           </View>
         )}
 
-        {/* Confirmed Friends list */}
+        {/* Friends list */}
         <View style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>Bạn bè trò chuyện ({friends.length})</Text>
           {friends.length === 0 ? (
@@ -554,10 +692,12 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
           ) : (
             friends.map((friend) => {
               const isOnline = friend.status === 'online';
+              const hasUnread = friend.unread_count > 0;
+
               return (
                 <TouchableOpacity
                   key={friend.id}
-                  style={styles.friendRow}
+                  style={[styles.friendRow, hasUnread && styles.friendRowUnread]}
                   onPress={() => setActiveFriend(friend)}
                 >
                   <View style={styles.friendLeft}>
@@ -567,19 +707,35 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
                       </Text>
                       <View style={[styles.statusIndicator, isOnline ? styles.onlineDot : styles.offlineDot]} />
                     </View>
-                    <View>
-                      <Text style={styles.friendName}>{friend.display_name}</Text>
-                      <Text style={styles.friendStatusText}>
-                        {isOnline ? 'Đang hoạt động' : 'Ngoại tuyến'}
+                    <View style={{ overflow: 'hidden', width: '65%' }}>
+                      <Text style={[styles.friendName, hasUnread && styles.friendNameUnread]}>
+                        {friend.display_name}
+                      </Text>
+                      <Text
+                        numberOfLines={1}
+                        style={[styles.friendStatusText, hasUnread && styles.friendPreviewUnread]}
+                      >
+                        {renderLastMessagePreview(friend)}
+                      </Text>
+                      <Text style={styles.friendStatusTextTime}>
+                        {formatActivityStatus(friend)}
                       </Text>
                     </View>
                   </View>
-                  <TouchableOpacity
-                    style={{ padding: 10 }}
-                    onPress={() => handleDeleteFriend(friend.id, friend.display_name)}
-                  >
-                    <Text style={{ color: '#ef4444', fontSize: 12, fontWeight: '700' }}>Hủy kết bạn</Text>
-                  </TouchableOpacity>
+                  
+                  <View style={styles.friendRowRight}>
+                    {hasUnread && (
+                      <View style={styles.unreadCountBadge}>
+                        <Text style={styles.unreadCountBadgeText}>{friend.unread_count}</Text>
+                      </View>
+                    )}
+                    <TouchableOpacity
+                      style={{ padding: 6 }}
+                      onPress={() => handleDeleteFriend(friend.id, friend.display_name)}
+                    >
+                      <Text style={{ color: '#ef4444', fontSize: 11, fontWeight: '700' }}>Hủy</Text>
+                    </TouchableOpacity>
+                  </View>
                 </TouchableOpacity>
               );
             })
@@ -607,7 +763,7 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
               <View style={{ alignItems: 'center' }}>
                 <Text style={styles.chatPartnerName}>{activeFriend.display_name}</Text>
                 <Text style={styles.chatPartnerStatus}>
-                  {activeFriend.status === 'online' ? '🟢 Hoạt động' : '⚫ Ngoại tuyến'}
+                  {formatActivityStatus(activeFriend)}
                 </Text>
               </View>
               <View style={{ width: 60 }} />
@@ -628,15 +784,45 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
                   minute: '2-digit'
                 });
 
+                const isSticker = item.media_type === 'sticker';
+                
+                const renderMobileBubbleContent = () => {
+                  if (item.media_type === 'image') {
+                    // Prepend dynamic absolute hostname if relative path
+                    const absoluteUrl = item.content.startsWith('http')
+                      ? item.content
+                      : `${CHAT_SERVER_URL.replace('/chat', '')}${item.content}`;
+                    return (
+                      <Image
+                        source={{ uri: absoluteUrl }}
+                        style={styles.chatImageMedia}
+                        resizeMode="cover"
+                      />
+                    );
+                  }
+                  if (item.media_type === 'sticker') {
+                    return <Text style={styles.chatStickerMedia}>{item.content}</Text>;
+                  }
+                  return (
+                    <Text style={[styles.bubbleText, isSelf ? styles.selfText : styles.otherText]}>
+                      {item.content}
+                    </Text>
+                  );
+                };
+
                 return (
                   <View style={[styles.bubbleWrapper, isSelf ? styles.selfWrapper : styles.otherWrapper]}>
-                    <View style={[styles.bubble, isSelf ? styles.selfBubble : styles.otherBubble]}>
-                      <Text style={[styles.bubbleText, isSelf ? styles.selfText : styles.otherText]}>
-                        {item.content}
-                      </Text>
-                      <Text style={[styles.bubbleTime, isSelf ? styles.selfTime : styles.otherTime]}>
-                        {time}
-                      </Text>
+                    <View style={[
+                      styles.bubble,
+                      isSelf ? styles.selfBubble : styles.otherBubble,
+                      isSticker && styles.stickerBubbleStyle
+                    ]}>
+                      {renderMobileBubbleContent()}
+                      {!isSticker && (
+                        <Text style={[styles.bubbleTime, isSelf ? styles.selfTime : styles.otherTime]}>
+                          {time}
+                        </Text>
+                      )}
                     </View>
                   </View>
                 );
@@ -650,6 +836,103 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
               }
             />
 
+            {/* Emojis list panel */}
+            {showEmojiPanel && (
+              <View style={styles.panelContainer}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingVertical: 10 }}>
+                  {EMOJIS.map((emoji) => (
+                    <TouchableOpacity
+                      key={emoji}
+                      style={styles.panelItemBtn}
+                      onPress={() => {
+                        setInputText((prev) => prev + emoji);
+                        setShowEmojiPanel(false);
+                      }}
+                    >
+                      <Text style={{ fontSize: 24 }}>{emoji}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Stickers list panel */}
+            {showStickerPanel && (
+              <View style={styles.panelContainer}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingVertical: 10 }}>
+                  {STICKERS.map((stk) => (
+                    <TouchableOpacity
+                      key={stk.code}
+                      style={styles.panelStickerBtn}
+                      onPress={() => handleSendSticker(stk.code)}
+                    >
+                      <Text style={{ fontSize: 32, textAlign: 'center' }}>{stk.code}</Text>
+                      <Text style={{ fontSize: 9, color: '#64748b', fontWeight: 'bold', marginTop: 4 }}>
+                        {stk.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Media input modal */}
+            <Modal
+              visible={showMediaModal}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setShowMediaModal(false)}
+            >
+              <View style={styles.modalBackdrop}>
+                <View style={styles.modalCard}>
+                  <Text style={styles.modalTitle}>Gửi Liên Kết Media</Text>
+                  
+                  <View style={styles.typeSelectorRow}>
+                    <TouchableOpacity
+                      style={[styles.typeBtn, mediaTypeInput === 'image' && styles.typeBtnActive]}
+                      onPress={() => setMediaTypeInput('image')}
+                    >
+                      <Text style={[styles.typeBtnText, mediaTypeInput === 'image' && styles.typeBtnTextActive]}>
+                        Hình Ảnh
+                      </Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity
+                      style={[styles.typeBtn, mediaTypeInput === 'video' && styles.typeBtnActive]}
+                      onPress={() => setMediaTypeInput('video')}
+                    >
+                      <Text style={[styles.typeBtnText, mediaTypeInput === 'video' && styles.typeBtnTextActive]}>
+                        Video (Mp4)
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="Dán link http://... ở đây"
+                    placeholderTextColor="#94a3b8"
+                    value={mediaUrlInput}
+                    onChangeText={setMediaUrlInput}
+                  />
+
+                  <View style={styles.modalActions}>
+                    <TouchableOpacity
+                      style={[styles.btnModalAction, { backgroundColor: '#e2e8f0' }]}
+                      onPress={() => setShowMediaModal(false)}
+                    >
+                      <Text style={{ color: '#475569', fontWeight: 'bold' }}>Quay lại</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.btnModalAction, { backgroundColor: '#2563eb' }]}
+                      onPress={handleSendMediaUrl}
+                    >
+                      <Text style={{ color: '#ffffff', fontWeight: 'bold' }}>Gửi link</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </Modal>
+
             {/* Typing status indicator */}
             {friendTyping && (
               <View style={styles.typingIndicatorBox}>
@@ -659,6 +942,38 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
 
             {/* Input bar */}
             <View style={styles.chatInputBar}>
+              <View style={styles.mediaRowActions}>
+                {/* Emoji toggle */}
+                <TouchableOpacity
+                  style={styles.btnActionRound}
+                  onPress={() => {
+                    setShowEmojiPanel(!showEmojiPanel);
+                    setShowStickerPanel(false);
+                  }}
+                >
+                  <Text style={{ fontSize: 16 }}>😀</Text>
+                </TouchableOpacity>
+
+                {/* Sticker toggle */}
+                <TouchableOpacity
+                  style={styles.btnActionRound}
+                  onPress={() => {
+                    setShowStickerPanel(!showStickerPanel);
+                    setShowEmojiPanel(false);
+                  }}
+                >
+                  <Text style={{ fontSize: 16 }}>🍜</Text>
+                </TouchableOpacity>
+
+                {/* Media Url picker */}
+                <TouchableOpacity
+                  style={styles.btnActionRound}
+                  onPress={() => setShowMediaModal(true)}
+                >
+                  <Text style={{ fontSize: 16 }}>🔗</Text>
+                </TouchableOpacity>
+              </View>
+
               <TextInput
                 style={styles.chatInput}
                 placeholder="Nhập tin nhắn..."
@@ -870,7 +1185,7 @@ const styles = StyleSheet.create({
     padding: 16
   },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     color: '#64748b',
     textTransform: 'uppercase',
@@ -930,10 +1245,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f1f5f9'
   },
+  friendRowUnread: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff'
+  },
+  friendRowRight: {
+    alignItems: 'flex-end',
+    gap: 6
+  },
+  unreadCountBadge: {
+    backgroundColor: '#2563eb',
+    borderRadius: 9,
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  unreadCountBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: 'bold'
+  },
   friendLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12
+    gap: 12,
+    flex: 1
   },
   avatarPlaceholder: {
     width: 40,
@@ -967,13 +1304,27 @@ const styles = StyleSheet.create({
   },
   friendName: {
     fontSize: 14,
-    fontWeight: 'bold',
+    fontWeight: '700',
     color: '#0f172a'
+  },
+  friendNameUnread: {
+    fontWeight: '900',
+    color: '#1e3a8a'
+  },
+  friendPreviewUnread: {
+    fontWeight: 'bold',
+    color: '#2563eb'
   },
   friendStatusText: {
     fontSize: 11,
     color: '#64748b',
     marginTop: 2
+  },
+  friendStatusTextTime: {
+    fontSize: 9,
+    color: '#94a3b8',
+    marginTop: 2,
+    fontWeight: '600'
   },
   emptyText: {
     fontSize: 12,
@@ -1044,6 +1395,11 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     borderBottomLeftRadius: 2
   },
+  stickerBubbleStyle: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    padding: 0
+  },
   bubbleText: {
     fontSize: 14,
     lineHeight: 18
@@ -1053,6 +1409,14 @@ const styles = StyleSheet.create({
   },
   otherText: {
     color: '#0f172a'
+  },
+  chatImageMedia: {
+    width: 200,
+    height: 160,
+    borderRadius: 10
+  },
+  chatStickerMedia: {
+    fontSize: 48
   },
   bubbleTime: {
     fontSize: 9,
@@ -1107,6 +1471,18 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     backgroundColor: '#f8fafc'
   },
+  mediaRowActions: {
+    flexDirection: 'row',
+    gap: 4
+  },
+  btnActionRound: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
   btnSend: {
     backgroundColor: '#2563eb',
     borderRadius: 20,
@@ -1122,5 +1498,86 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: 'bold',
     fontSize: 13
+  },
+  panelContainer: {
+    backgroundColor: '#ffffff',
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingHorizontal: 12
+  },
+  panelItemBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6
+  },
+  panelStickerBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    alignItems: 'center'
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    elevation: 5
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#0f172a',
+    textAlign: 'center',
+    marginBottom: 16
+  },
+  typeSelectorRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12
+  },
+  typeBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    alignItems: 'center'
+  },
+  typeBtnActive: {
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff'
+  },
+  typeBtnText: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '700'
+  },
+  typeBtnTextActive: {
+    color: '#2563eb'
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 13,
+    color: '#0f172a',
+    marginBottom: 16
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8
+  },
+  btnModalAction: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 6
   }
 });

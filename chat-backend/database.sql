@@ -13,6 +13,7 @@ CREATE TABLE users (
     password_hash VARCHAR(255) NOT NULL,
     display_name VARCHAR(100) NOT NULL,
     avatar_url VARCHAR(255),
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -44,6 +45,7 @@ CREATE TABLE messages (
     sender_id INT REFERENCES users(id) ON DELETE CASCADE,
     receiver_id INT REFERENCES users(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
+    media_type VARCHAR(20) DEFAULT 'text',
     is_read BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

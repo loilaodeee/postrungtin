@@ -4,6 +4,7 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 const admin = require('firebase-admin');
+const multer = require('multer');
 
 const JWT_SECRET = 'super_pos_secret_key_123';
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://chat_user:ChatPass123@localhost:5432/postrungtin_chat';
@@ -13,20 +14,35 @@ const pool = new Pool({
   connectionString: DATABASE_URL
 });
 
+// Setup Multer for File Uploads (images and videos)
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage });
+
 // Check/Initialize Firebase Admin
 let firebaseEnabled = false;
-try {
-  admin.app(); // Throws if the default app is not initialized
+if (admin.apps.length > 0) {
   firebaseEnabled = true;
   console.log('Chat module: Firebase Admin already initialized by parent process.');
-} catch (e) {
-  // Not initialized, try to initialize it
+} else {
   const SERVICE_ACCOUNT_FILE = path.join(__dirname, 'data', 'firebase-service-account.json');
   if (fs.existsSync(SERVICE_ACCOUNT_FILE)) {
     try {
       const serviceAccount = require(SERVICE_ACCOUNT_FILE);
       admin.initializeApp({
-        credential: admin.cert ? admin.cert(serviceAccount) : admin.credential.cert(serviceAccount)
+        credential: admin.credential.cert(serviceAccount)
       });
       firebaseEnabled = true;
       console.log('Chat module: Firebase Admin initialized successfully.');
@@ -63,11 +79,32 @@ async function sendPushNotification(userId, title, body, dataPayload = {}) {
   }
 }
 
-module.exports = function setupChat(app, io) {
-  // ----------------------------------------------------
-  // REST API Routes (Mounted under /chat)
-  // ----------------------------------------------------
+async function updateLastSeen(userId) {
+  try {
+    await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [userId]);
+  } catch (err) {
+    console.error('Error updating last_seen:', err);
+  }
+}
 
+module.exports = function setupChat(app, io) {
+  // Serve uploaded files statically at /chat/uploads/
+  app.use('/chat/uploads', (req, res, next) => {
+    // Enable CORS for static file downloads
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    next();
+  }, require('express').static(uploadDir));
+
+  // File upload endpoint
+  app.post('/chat/upload', upload.single('file'), (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Không tìm thấy file nào được tải lên!' });
+    }
+    const fileUrl = `/chat/uploads/${req.file.filename}`;
+    res.json({ fileUrl });
+  });
+
+  // REST API Routes (Mounted under /chat)
   // Register
   app.post('/chat/auth/register', async (req, res) => {
     const { username, password, display_name } = req.body;
@@ -166,12 +203,27 @@ module.exports = function setupChat(app, io) {
     }
   });
 
-  // Friends & Requests list
+  // Friends & Requests list (Advanced query returning unread count and last seen)
   app.get('/chat/friends/list', authenticate, async (req, res) => {
     try {
       const dbRes = await pool.query(
         `SELECT f.*, 
-                u.id as user_id, u.username, u.display_name, u.avatar_url
+                u.id as user_id, u.username, u.display_name, u.avatar_url, u.last_seen,
+                (SELECT json_build_object(
+                          'id', m.id,
+                          'content', m.content, 
+                          'sender_id', m.sender_id, 
+                          'media_type', m.media_type, 
+                          'created_at', m.created_at,
+                          'is_read', m.is_read
+                        )
+                 FROM messages m
+                 WHERE (m.sender_id = $1 AND m.receiver_id = u.id) 
+                    OR (m.sender_id = u.id AND m.receiver_id = $1)
+                 ORDER BY m.created_at DESC LIMIT 1) as last_message,
+                (SELECT COUNT(*)::int 
+                 FROM messages m
+                 WHERE m.sender_id = u.id AND m.receiver_id = $1 AND m.is_read = false) as unread_count
          FROM friendships f
          JOIN users u ON (u.id = CASE WHEN f.user_id_1 = $1 THEN f.user_id_2 ELSE f.user_id_1 END)
          WHERE f.user_id_1 = $1 OR f.user_id_2 = $1`,
@@ -187,7 +239,10 @@ module.exports = function setupChat(app, io) {
           id: row.user_id,
           username: row.username,
           display_name: row.display_name,
-          avatar_url: row.avatar_url
+          avatar_url: row.avatar_url,
+          last_seen: row.last_seen,
+          last_message: row.last_message,
+          unread_count: row.unread_count || 0
         };
 
         if (row.status === 'accepted') {
@@ -199,6 +254,13 @@ module.exports = function setupChat(app, io) {
             pendingIncoming.push(friendData);
           }
         }
+      });
+
+      // Sort friends: online first, then by last message timestamp (newest first)
+      friends.sort((a, b) => {
+        const aTime = a.last_message ? new Date(a.last_message.created_at).getTime() : 0;
+        const bTime = b.last_message ? new Date(b.last_message.created_at).getTime() : 0;
+        return bTime - aTime;
       });
 
       res.json({ friends, pendingIncoming, pendingOutgoing });
@@ -339,6 +401,32 @@ module.exports = function setupChat(app, io) {
     }
   });
 
+  // Mark all messages as read from a friend
+  app.post('/chat/messages/read', authenticate, async (req, res) => {
+    const { friendId } = req.body;
+    if (!friendId) return res.status(400).json({ error: 'Yêu cầu không hợp lệ!' });
+
+    try {
+      await pool.query(
+        'UPDATE messages SET is_read = true WHERE sender_id = $1 AND receiver_id = $2 AND is_read = false',
+        [friendId, req.userId]
+      );
+
+      // Emit read receipt back to the sender if online
+      const senderSockets = activeUsers.get(friendId);
+      if (senderSockets) {
+        senderSockets.forEach(sockId => {
+          chatIo.to(sockId).emit('messages-read', { readerId: req.userId });
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Mark read error:', error);
+      res.status(500).json({ error: 'Lỗi cập nhật đã đọc.' });
+    }
+  });
+
   // Chat History
   app.get('/chat/messages/history/:friendId', authenticate, async (req, res) => {
     const { friendId } = req.params;
@@ -354,6 +442,20 @@ module.exports = function setupChat(app, io) {
          LIMIT $3 OFFSET $4`,
         [req.userId, friendId, limit, offset]
       );
+
+      // Automatically mark fetched messages as read
+      await pool.query(
+        'UPDATE messages SET is_read = true WHERE sender_id = $1 AND receiver_id = $2 AND is_read = false',
+        [friendId, req.userId]
+      );
+
+      // Notify sender that their messages have been read
+      const senderSockets = activeUsers.get(friendId);
+      if (senderSockets) {
+        senderSockets.forEach(sockId => {
+          chatIo.to(sockId).emit('messages-read', { readerId: req.userId });
+        });
+      }
 
       res.json(dbRes.rows.reverse());
     } catch (error) {
@@ -387,6 +489,9 @@ module.exports = function setupChat(app, io) {
     }
     activeUsers.get(uId).add(socket.id);
 
+    // Update last seen activity
+    updateLastSeen(uId);
+
     chatIo.emit('user-status-change', { userId: uId, status: 'online' });
 
     socket.on('register-fcm-token', async (token) => {
@@ -419,14 +524,14 @@ module.exports = function setupChat(app, io) {
       }
     });
 
-    socket.on('private-message', async ({ receiverId, content }) => {
+    socket.on('private-message', async ({ receiverId, content, media_type = 'text' }) => {
       const text = content ? content.trim() : '';
       if (!text || !receiverId) return;
 
       try {
         const dbRes = await pool.query(
-          'INSERT INTO messages (sender_id, receiver_id, content) VALUES ($1, $2, $3) RETURNING *',
-          [uId, receiverId, text]
+          'INSERT INTO messages (sender_id, receiver_id, content, media_type) VALUES ($1, $2, $3, $4) RETURNING *',
+          [uId, receiverId, text, media_type]
         );
         const savedMsg = dbRes.rows[0];
 
@@ -453,7 +558,12 @@ module.exports = function setupChat(app, io) {
         }
 
         if (!receiverNotified) {
-          sendPushNotification(receiverId, senderName, text, {
+          let pushBody = text;
+          if (media_type === 'image') pushBody = '📷 Đã gửi một ảnh';
+          else if (media_type === 'video') pushBody = '🎥 Đã gửi một video';
+          else if (media_type === 'sticker') pushBody = '🍜 Đã gửi một sticker';
+
+          sendPushNotification(receiverId, senderName, pushBody, {
             type: 'chat_message',
             senderId: uId.toString()
           });
@@ -469,6 +579,7 @@ module.exports = function setupChat(app, io) {
         userSockets.delete(socket.id);
         if (userSockets.size === 0) {
           activeUsers.delete(uId);
+          updateLastSeen(uId);
           chatIo.emit('user-status-change', { userId: uId, status: 'offline' });
         }
       }

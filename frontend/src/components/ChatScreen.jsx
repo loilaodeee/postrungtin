@@ -1,6 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
-import { Send, UserPlus, Search, UserCheck, LogOut, MessageSquare, ShieldAlert, Sparkles, User, Check, X } from 'lucide-react';
+import { Send, Image, Film, Smile, LogOut, MessageSquare, Sparkles, User, Check, X, FileText } from 'lucide-react';
+
+const STICKERS = [
+  { code: '🍜', label: 'Hủ tiếu' },
+  { code: '🥟', label: 'Sủi cảo' },
+  { code: '🍢', label: 'Xiên que' },
+  { code: '🥤', label: 'Trà sữa' },
+  { code: '🍦', label: 'Kem' },
+  { code: '🍰', label: 'Bánh ngọt' },
+  { code: '🍺', label: 'Bia' },
+  { code: '🍟', label: 'Khoai tây' }
+];
+
+const EMOJIS = ['😀', '😂', '😍', '👍', '🎉', '🍜', '🥟', '🥤', '🔥', '❤️', '👏', '😭'];
 
 export default function ChatScreen() {
   const [token, setToken] = useState(localStorage.getItem('chatToken') || '');
@@ -25,17 +38,43 @@ export default function ChatScreen() {
   const [isTyping, setIsTyping] = useState(false);
   const [friendTyping, setFriendTyping] = useState(false);
 
+  // Panels toggles
+  const [showEmojiPanel, setShowEmojiPanel] = useState(false);
+  const [showStickerPanel, setShowStickerPanel] = useState(false);
+
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
   const CHAT_SERVER_URL = `http://${window.location.hostname}/chat`;
 
+  // Play "Ting" notification sound using Web Audio API synthesis
+  const playNotificationSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.1); // A5
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+      
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+    } catch (err) {
+      console.error('Failed to play chat sound:', err);
+    }
+  };
+
   // 1. Establish Socket Connection and Listeners
   useEffect(() => {
     if (!token) return;
 
-    // Connect to Chat Namespace on Port 80
     const socket = io(`http://${window.location.hostname}/chat`, {
       auth: { token }
     });
@@ -47,15 +86,21 @@ export default function ChatScreen() {
     });
 
     socket.on('private-message', (msg) => {
-      // Append message if it's from the active friend or sent by us
-      if (
-        (activeFriend && msg.sender_id === activeFriend.id) ||
-        msg.sender_id === user.id
-      ) {
+      const isFromActiveFriend = activeFriend && msg.sender_id === activeFriend.id;
+      const isSentByMe = msg.sender_id === user.id;
+
+      if (isFromActiveFriend || isSentByMe) {
         setMessages((prev) => [...prev, msg]);
+        if (isFromActiveFriend) {
+          // Send read confirmation to database
+          markMessagesAsRead(activeFriend.id);
+        }
+      } else {
+        // Play notification sound for background incoming messages
+        playNotificationSound();
       }
       
-      // Refresh friends list status/sorting if necessary
+      // Reload friends list to update badges & previews
       fetchFriendsList();
     });
 
@@ -79,10 +124,21 @@ export default function ChatScreen() {
 
     socket.on('friend-request-received', () => {
       fetchFriendsList();
+      playNotificationSound();
     });
 
     socket.on('friend-request-accepted', () => {
       fetchFriendsList();
+      playNotificationSound();
+    });
+
+    socket.on('messages-read', ({ readerId }) => {
+      if (activeFriend && readerId === activeFriend.id) {
+        // Update read receipts locally
+        setMessages((prev) =>
+          prev.map((m) => (m.receiver_id === readerId ? { ...m, is_read: true } : m))
+        );
+      }
     });
 
     return () => {
@@ -90,29 +146,47 @@ export default function ChatScreen() {
     };
   }, [token, activeFriend]);
 
-  // Load Friends List on Mount / Auth
+  // Load Friends List on Mount
   useEffect(() => {
     if (token) {
       fetchFriendsList();
     }
   }, [token]);
 
-  // Scroll to bottom when message arrives
+  // Scroll chat to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, friendTyping]);
 
-  // Load Message History when active friend changes
+  // Handle active conversation switch
   useEffect(() => {
     if (activeFriend) {
       fetchMessageHistory();
       setFriendTyping(false);
+      setShowEmojiPanel(false);
+      setShowStickerPanel(false);
     } else {
       setMessages([]);
     }
   }, [activeFriend]);
 
-  // REST API: Fetch friends & requests
+  // REST API: Mark as read
+  const markMessagesAsRead = async (friendId) => {
+    try {
+      await fetch(`${CHAT_SERVER_URL}/messages/read`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ friendId })
+      });
+    } catch (err) {
+      console.error('Error marking as read:', err);
+    }
+  };
+
+  // REST API: Get friends
   const fetchFriendsList = async () => {
     try {
       const res = await fetch(`${CHAT_SERVER_URL}/friends/list`, {
@@ -129,7 +203,7 @@ export default function ChatScreen() {
     }
   };
 
-  // REST API: Fetch message history
+  // REST API: Load history
   const fetchMessageHistory = async () => {
     if (!activeFriend) return;
     try {
@@ -139,13 +213,15 @@ export default function ChatScreen() {
       const data = await res.json();
       if (!data.error) {
         setMessages(data);
+        // Refresh friends list to clear unread badge locally
+        fetchFriendsList();
       }
     } catch (err) {
       console.error('Error fetching messages:', err);
     }
   };
 
-  // Auth: Handle Register/Login
+  // Auth: Submit registration/login
   const handleAuth = async (e) => {
     e.preventDefault();
     setAuthError('');
@@ -172,7 +248,6 @@ export default function ChatScreen() {
       setToken(data.token);
       setUser(data.user);
       
-      // Clear forms
       setUsername('');
       setPassword('');
       setDisplayName('');
@@ -211,7 +286,7 @@ export default function ChatScreen() {
     }
   };
 
-  // Friendship: Send Request
+  // Friendship: Send friend invitation
   const sendFriendRequest = async (friendId) => {
     try {
       const res = await fetch(`${CHAT_SERVER_URL}/friends/request`, {
@@ -236,7 +311,7 @@ export default function ChatScreen() {
     }
   };
 
-  // Friendship: Accept Request
+  // Friendship: Accept invitation
   const acceptFriendRequest = async (friendId) => {
     try {
       const res = await fetch(`${CHAT_SERVER_URL}/friends/accept`, {
@@ -256,7 +331,7 @@ export default function ChatScreen() {
     }
   };
 
-  // Friendship: Reject / Cancel Friendship
+  // Friendship: Delete friendship
   const deleteFriendship = async (friendId) => {
     if (!window.confirm('Bạn có chắc chắn muốn hủy kết bạn/hủy yêu cầu với người này?')) return;
     try {
@@ -280,7 +355,7 @@ export default function ChatScreen() {
     }
   };
 
-  // Chat: Input typing listeners
+  // Chat: Input typing indicators
   const handleInputChange = (e) => {
     setInputText(e.target.value);
     
@@ -291,7 +366,6 @@ export default function ChatScreen() {
       socketRef.current.emit('typing', { receiverId: activeFriend.id });
     }
 
-    // Clear previous timeout and set new one to emit stop-typing
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
       setIsTyping(false);
@@ -299,37 +373,141 @@ export default function ChatScreen() {
     }, 1500);
   };
 
-  // Chat: Send Message
+  // Chat: Send Text Message
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!inputText.trim() || !activeFriend || !socketRef.current) return;
 
-    // Send private message via socket (it will save in db and emit)
     socketRef.current.emit('private-message', {
       receiverId: activeFriend.id,
-      content: inputText.trim()
+      content: inputText.trim(),
+      media_type: 'text'
     });
 
-    // Clear locally
-    setInputText('');
-    setIsTyping(false);
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    socketRef.current.emit('stop-typing', { receiverId: activeFriend.id });
-
-    // Local echo for instantaneous UX (we also get confirmation back, but we push immediately)
     const tempMsg = {
       id: Date.now().toString(),
       sender_id: user.id,
       receiver_id: activeFriend.id,
       content: inputText.trim(),
+      media_type: 'text',
       created_at: new Date().toISOString()
     };
     setMessages((prev) => [...prev, tempMsg]);
+
+    setInputText('');
+    setIsTyping(false);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    socketRef.current.emit('stop-typing', { receiverId: activeFriend.id });
   };
 
-  // ----------------------------------------------------
-  // RENDER LOGIN / REGISTER SCREEN
-  // ----------------------------------------------------
+  // Chat: Send Sticker instantly
+  const handleSendSticker = (stickerCode) => {
+    if (!activeFriend || !socketRef.current) return;
+
+    socketRef.current.emit('private-message', {
+      receiverId: activeFriend.id,
+      content: stickerCode,
+      media_type: 'sticker'
+    });
+
+    const tempMsg = {
+      id: Date.now().toString(),
+      sender_id: user.id,
+      receiver_id: activeFriend.id,
+      content: stickerCode,
+      media_type: 'sticker',
+      created_at: new Date().toISOString()
+    };
+    setMessages((prev) => [...prev, tempMsg]);
+    setShowStickerPanel(false);
+  };
+
+  // Chat: Handle File Upload (Images & Videos)
+  const handleFileUpload = async (e, type) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`${CHAT_SERVER_URL}/upload`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body: formData
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+
+      if (data.fileUrl) {
+        socketRef.current.emit('private-message', {
+          receiverId: activeFriend.id,
+          content: data.fileUrl,
+          media_type: type
+        });
+
+        const tempMsg = {
+          id: Date.now().toString(),
+          sender_id: user.id,
+          receiver_id: activeFriend.id,
+          content: data.fileUrl,
+          media_type: type,
+          created_at: new Date().toISOString()
+        };
+        setMessages((prev) => [...prev, tempMsg]);
+      }
+    } catch (err) {
+      console.error('File upload error:', err);
+      alert('Không thể gửi file!');
+    }
+  };
+
+  // Formatting function for user active status
+  const formatActivityStatus = (friend) => {
+    if (friend.status === 'online') {
+      return '🟢 Đang hoạt động';
+    }
+    if (!friend.last_seen) {
+      return '⚫ Ngoại tuyến';
+    }
+    
+    const diffMs = Date.now() - new Date(friend.last_seen).getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return '⚫ Vừa hoạt động';
+    if (diffMins < 60) return `⚫ Hoạt động ${diffMins} phút trước`;
+    if (diffHours < 24) return `⚫ Hoạt động ${diffHours} giờ trước`;
+    return `⚫ Hoạt động ${diffDays} ngày trước`;
+  };
+
+  // Formatting function for last message preview
+  const renderLastMessagePreview = (friend) => {
+    const lm = friend.last_message;
+    if (!lm) return 'Hãy bắt đầu trò chuyện';
+
+    const isSelf = lm.sender_id === user.id;
+    const prefix = isSelf ? 'Bạn: ' : '';
+    
+    let contentPreview = lm.content;
+    if (lm.media_type === 'image') contentPreview = '📷 Đã gửi ảnh';
+    else if (lm.media_type === 'video') contentPreview = '🎥 Đã gửi video';
+    else if (lm.media_type === 'sticker') contentPreview = `🥟 Sticker ${lm.content}`;
+
+    if (contentPreview.length > 25) {
+      contentPreview = contentPreview.substring(0, 25) + '...';
+    }
+
+    return `${prefix}${contentPreview}`;
+  };
+
+  // Render auth card if not logged in
   if (!token || !user) {
     return (
       <div className="auth-chat-container">
@@ -487,14 +665,12 @@ export default function ChatScreen() {
     );
   }
 
-  // ----------------------------------------------------
-  // RENDER SOCIAL NETWORK & CHAT VIEW
-  // ----------------------------------------------------
+  // Render Chat application panel
   return (
     <div className="social-chat-wrapper card animate-pop">
       <div className="social-chat-container">
         
-        {/* Left Sidebar: User profile, search & friends list */}
+        {/* Left Sidebar */}
         <div className="social-sidebar">
           {/* User Profile Header */}
           <div className="sidebar-profile-header flex-between">
@@ -512,7 +688,7 @@ export default function ChatScreen() {
             </button>
           </div>
 
-          {/* Search bar to find new friends */}
+          {/* Search friends */}
           <div className="search-friends-box">
             <div className="search-input-wrapper">
               <Search size={16} className="search-icon" />
@@ -524,7 +700,7 @@ export default function ChatScreen() {
               />
             </div>
 
-            {/* User Search Results Dropdown */}
+            {/* Search results list */}
             {searchResults.length > 0 && (
               <div className="search-results-dropdown card">
                 {searchResults.map((usr) => {
@@ -560,10 +736,10 @@ export default function ChatScreen() {
             )}
           </div>
 
-          {/* List categories: Pending Requests and Friends list */}
+          {/* Scroller categories */}
           <div className="sidebar-lists-scroller">
             
-            {/* 1. Pending Incoming Requests */}
+            {/* Friend Requests invitations */}
             {pendingIncoming.length > 0 && (
               <div className="list-group">
                 <span className="list-group-title">Lời mời kết bạn ({pendingIncoming.length})</span>
@@ -583,43 +759,56 @@ export default function ChatScreen() {
               </div>
             )}
 
-            {/* 2. Friends List */}
+            {/* Friend Conversational lists */}
             <div className="list-group" style={{ marginTop: 12 }}>
-              <span className="list-group-title">Danh sách bạn bè ({friends.length})</span>
+              <span className="list-group-title">Cuộc hội thoại ({friends.length})</span>
               {friends.length === 0 ? (
                 <p className="empty-list-text">Chưa kết bạn với ai. Hãy dùng thanh tìm kiếm để kết bạn!</p>
               ) : (
                 friends.map((friend) => {
                   const isActive = activeFriend && activeFriend.id === friend.id;
                   const isOnline = friend.status === 'online';
+                  const hasUnread = friend.unread_count > 0;
 
                   return (
                     <div
                       key={friend.id}
-                      className={`friend-list-row flex-between ${isActive ? 'active' : ''}`}
+                      className={`friend-list-row flex-between ${isActive ? 'active' : ''} ${hasUnread ? 'unread-conversation' : ''}`}
                       onClick={() => setActiveFriend(friend)}
                     >
                       <div className="friend-info flex-center gap-8">
                         <div className="friend-avatar-circle">
-                          <User size={16} />
+                          <span className="letter-bold">
+                            {friend.display_name.charAt(0).toUpperCase()}
+                          </span>
                           <span className={`status-dot ${isOnline ? 'online' : 'offline'}`}></span>
                         </div>
-                        <div>
-                          <strong>{friend.display_name}</strong>
-                          <span className="friend-username">@{friend.username}</span>
+                        <div className="conversation-texts" style={{ overflow: 'hidden' }}>
+                          <strong className="friend-disp-name">{friend.display_name}</strong>
+                          <span className="last-message-preview">
+                            {renderLastMessagePreview(friend)}
+                          </span>
+                          <span className="status-subtext">
+                            {formatActivityStatus(friend)}
+                          </span>
                         </div>
                       </div>
                       
-                      <button
-                        className="btn-delete-friend"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteFriendship(friend.id);
-                        }}
-                        title="Hủy kết bạn"
-                      >
-                        <X size={14} />
-                      </button>
+                      <div className="right-indicators flex-center gap-8">
+                        {hasUnread && (
+                          <span className="unread-badge-circle">{friend.unread_count}</span>
+                        )}
+                        <button
+                          className="btn-delete-friend"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteFriendship(friend.id);
+                          }}
+                          title="Hủy kết bạn"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
                     </div>
                   );
                 })
@@ -629,26 +818,26 @@ export default function ChatScreen() {
           </div>
         </div>
 
-        {/* Right Pane: Active Chat Room */}
+        {/* Right Chat Pane */}
         <div className="social-chat-pane">
           {activeFriend ? (
             <div className="chat-room-container">
-              {/* Chat Room Header */}
+              {/* Chat Header */}
               <div className="chat-room-header flex-between">
                 <div className="chat-partner-info flex-center gap-8">
                   <div className="avatar-circle">
-                    <User size={18} />
+                    <span className="letter-bold">{activeFriend.display_name.charAt(0).toUpperCase()}</span>
                   </div>
                   <div>
                     <h3>{activeFriend.display_name}</h3>
                     <p className="partner-status">
-                      {activeFriend.status === 'online' ? '🟢 Đang hoạt động' : '⚫ Ngoại tuyến'}
+                      {formatActivityStatus(activeFriend)}
                     </p>
                   </div>
                 </div>
               </div>
 
-              {/* Chat Message list scroller */}
+              {/* Chat Message Scroll pane */}
               <div className="chat-messages-scroller">
                 {messages.length === 0 ? (
                   <div className="empty-chat-placeholder">
@@ -661,10 +850,40 @@ export default function ChatScreen() {
                     const date = new Date(msg.created_at);
                     const timeStr = date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 
+                    // Render media content based on message type
+                    const renderBubbleContent = () => {
+                      if (msg.media_type === 'image') {
+                        return (
+                          <a href={msg.content.startsWith('http') ? msg.content : `http://${window.location.hostname}${msg.content}`} target="_blank" rel="noopener noreferrer">
+                            <img
+                              src={msg.content.startsWith('http') ? msg.content : `http://${window.location.hostname}${msg.content}`}
+                              alt="Gửi ảnh"
+                              className="chat-image-content"
+                            />
+                          </a>
+                        );
+                      }
+                      if (msg.media_type === 'video') {
+                        return (
+                          <video
+                            src={msg.content.startsWith('http') ? msg.content : `http://${window.location.hostname}${msg.content}`}
+                            controls
+                            className="chat-video-content"
+                          />
+                        );
+                      }
+                      if (msg.media_type === 'sticker') {
+                        return <span className="chat-sticker-content">{msg.content}</span>;
+                      }
+                      return <p>{msg.content}</p>;
+                    };
+
+                    const isSticker = msg.media_type === 'sticker';
+
                     return (
                       <div key={msg.id} className={`message-bubble-wrapper ${isSelf ? 'self' : 'other'}`}>
-                        <div className="message-bubble">
-                          <p>{msg.content}</p>
+                        <div className={`message-bubble ${isSticker ? 'sticker-bubble' : ''}`}>
+                          {renderBubbleContent()}
                           <span className="message-time">{timeStr}</span>
                         </div>
                       </div>
@@ -683,25 +902,116 @@ export default function ChatScreen() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Message Input box */}
-              <form className="chat-input-bar" onSubmit={handleSendMessage}>
-                <input
-                  type="text"
-                  placeholder="Nhập tin nhắn..."
-                  value={inputText}
-                  onChange={handleInputChange}
-                />
-                <button type="submit" className="btn-send-message" disabled={!inputText.trim()}>
-                  <Send size={16} />
-                </button>
-              </form>
+              {/* Advanced Message Input Bar (Uploads, Emojis, Stickers) */}
+              <div className="chat-input-wrapper-container">
+                {/* 1. Emoji Selector Panel */}
+                {showEmojiPanel && (
+                  <div className="selector-panel emoji-panel flex-center gap-8 animate-pop">
+                    {EMOJIS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        type="button"
+                        className="btn-select-item"
+                        onClick={() => {
+                          setInputText((prev) => prev + emoji);
+                          setShowEmojiPanel(false);
+                        }}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* 2. Sticker Selector Panel */}
+                {showStickerPanel && (
+                  <div className="selector-panel sticker-panel flex-center gap-12 animate-pop">
+                    {STICKERS.map((stk) => (
+                      <button
+                        key={stk.code}
+                        type="button"
+                        className="btn-select-sticker flex-column flex-center"
+                        onClick={() => handleSendSticker(stk.code)}
+                      >
+                        <span className="sticker-face">{stk.code}</span>
+                        <span className="sticker-label">{stk.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Input row */}
+                <form className="chat-input-bar" onSubmit={handleSendMessage}>
+                  <div className="media-buttons flex-center gap-8">
+                    {/* Emoji toggle */}
+                    <button
+                      type="button"
+                      className={`btn-media-action ${showEmojiPanel ? 'active' : ''}`}
+                      onClick={() => {
+                        setShowEmojiPanel(!showEmojiPanel);
+                        setShowStickerPanel(false);
+                      }}
+                      title="Emojis"
+                    >
+                      <Smile size={18} />
+                    </button>
+
+                    {/* Sticker toggle */}
+                    <button
+                      type="button"
+                      className={`btn-media-action ${showStickerPanel ? 'active' : ''}`}
+                      onClick={() => {
+                        setShowStickerPanel(!showStickerPanel);
+                        setShowEmojiPanel(false);
+                      }}
+                      title="Stickers"
+                    >
+                      <Sparkles size={18} />
+                    </button>
+
+                    {/* Image picker */}
+                    <label className="btn-media-action file-label-btn" title="Gửi ảnh">
+                      <Image size={18} />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ display: 'none' }}
+                        onChange={(e) => handleFileUpload(e, 'image')}
+                      />
+                    </label>
+
+                    {/* Video picker */}
+                    <label className="btn-media-action file-label-btn" title="Gửi video">
+                      <Film size={18} />
+                      <input
+                        type="file"
+                        accept="video/*"
+                        style={{ display: 'none' }}
+                        onChange={(e) => handleFileUpload(e, 'video')}
+                      />
+                    </label>
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Nhập tin nhắn..."
+                    value={inputText}
+                    onChange={handleInputChange}
+                  />
+
+                  <button type="submit" className="btn-send-message" disabled={!inputText.trim()}>
+                    <Send size={16} />
+                  </button>
+                </form>
+              </div>
+
             </div>
           ) : (
             <div className="no-chat-selected flex-center">
               <div className="text-center">
                 <Sparkles size={48} className="text-primary animate-bounce" style={{ marginBottom: 12, display: 'inline-block' }} />
                 <h3>Chọn bạn bè để bắt đầu trò chuyện</h3>
-                <p>Tin nhắn được đồng bộ thời gian thực bảo mật.</p>
+                <p>Tin nhắn và cuộc gọi media thời gian thực.</p>
               </div>
             </div>
           )}
@@ -719,7 +1029,7 @@ export default function ChatScreen() {
         }
         .social-chat-container {
           display: flex;
-          height: 600px;
+          height: 620px;
         }
         .social-sidebar {
           width: 320px;
@@ -742,6 +1052,11 @@ export default function ChatScreen() {
           display: flex;
           align-items: center;
           justify-content: center;
+        }
+        .letter-bold {
+          font-weight: 800;
+          color: #475569;
+          font-size: 1rem;
         }
         .profile-info h4 {
           font-size: 0.95rem;
@@ -862,10 +1177,12 @@ export default function ChatScreen() {
           gap: 4px;
         }
         .friend-list-row {
-          padding: 10px;
+          padding: 12px 10px;
           border-radius: 8px;
           cursor: pointer;
           transition: background-color 0.2s;
+          display: flex;
+          align-items: center;
         }
         .friend-list-row:hover {
           background-color: var(--bg-body);
@@ -877,8 +1194,8 @@ export default function ChatScreen() {
           color: var(--primary-dark);
         }
         .friend-avatar-circle {
-          width: 32px;
-          height: 32px;
+          width: 36px;
+          height: 36px;
           border-radius: 50%;
           background-color: #e2e8f0;
           display: flex;
@@ -890,25 +1207,58 @@ export default function ChatScreen() {
           position: absolute;
           bottom: 0;
           right: 0;
-          width: 8px;
-          height: 8px;
+          width: 9px;
+          height: 9px;
           border-radius: 50%;
-          border: 1.5px solid #ffffff;
+          border: 2px solid #ffffff;
         }
         .status-dot.online {
           background-color: #10b981;
+          box-shadow: 0 0 8px #10b981;
         }
         .status-dot.offline {
           background-color: #94a3b8;
         }
-        .friend-info strong {
-          display: block;
+        .conversation-texts {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .friend-disp-name {
           font-size: 0.85rem;
           color: var(--text);
         }
-        .friend-username {
-          font-size: 0.7rem;
+        .last-message-preview {
+          font-size: 0.75rem;
           color: var(--text-muted);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          font-weight: 500;
+        }
+        .status-subtext {
+          font-size: 0.65rem;
+          color: var(--text-muted);
+          font-weight: 600;
+        }
+        .unread-conversation .friend-disp-name {
+          font-weight: 900;
+        }
+        .unread-conversation .last-message-preview {
+          color: var(--primary-dark);
+          font-weight: 800;
+        }
+        .unread-badge-circle {
+          background-color: var(--primary);
+          color: #ffffff;
+          border-radius: 50%;
+          width: 18px;
+          height: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 0.65rem;
+          font-weight: 800;
         }
         .btn-delete-friend {
           background: transparent;
@@ -1001,6 +1351,40 @@ export default function ChatScreen() {
           color: var(--text);
           border-bottom-left-radius: 2px;
         }
+        
+        /* Media and sticker styling */
+        .chat-image-content {
+          max-width: 240px;
+          max-height: 200px;
+          border-radius: 8px;
+          margin-top: 4px;
+          object-fit: cover;
+          display: block;
+        }
+        .chat-video-content {
+          max-width: 280px;
+          max-height: 220px;
+          border-radius: 8px;
+          margin-top: 4px;
+          display: block;
+        }
+        .chat-sticker-content {
+          font-size: 3.5rem;
+          display: inline-block;
+          animation: bounce-sticker 0.5s ease-out;
+        }
+        @keyframes bounce-sticker {
+          0% { transform: scale(0.3); }
+          50% { transform: scale(1.1); }
+          100% { transform: scale(1.0); }
+        }
+        .sticker-bubble {
+          background: transparent !important;
+          border: none !important;
+          box-shadow: none !important;
+          padding: 0 !important;
+        }
+        
         .message-time {
           display: block;
           font-size: 0.65rem;
@@ -1040,11 +1424,16 @@ export default function ChatScreen() {
           font-weight: 600;
           font-size: 0.9rem;
         }
-        .chat-input-bar {
-          padding: 12px 20px;
+        
+        .chat-input-wrapper-container {
           background-color: var(--bg-card);
           border-top: 1px solid var(--border);
+          position: relative;
+        }
+        .chat-input-bar {
+          padding: 12px 20px;
           display: flex;
+          align-items: center;
           gap: 10px;
         }
         .chat-input-bar input {
@@ -1076,6 +1465,82 @@ export default function ChatScreen() {
           background-color: var(--border);
           cursor: not-allowed;
         }
+        
+        /* Selector panels */
+        .selector-panel {
+          position: absolute;
+          bottom: 60px;
+          left: 20px;
+          background-color: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          padding: 10px;
+          z-index: 100;
+        }
+        .emoji-panel {
+          display: flex;
+          max-width: 280px;
+          flex-wrap: wrap;
+        }
+        .sticker-panel {
+          display: flex;
+          max-width: 360px;
+          flex-wrap: wrap;
+        }
+        .btn-select-item {
+          background: none;
+          border: none;
+          font-size: 1.5rem;
+          padding: 4px 8px;
+          cursor: pointer;
+          border-radius: 6px;
+          transition: background-color 0.2s;
+        }
+        .btn-select-item:hover {
+          background-color: var(--bg-body);
+        }
+        .btn-select-sticker {
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 8px;
+          border-radius: 8px;
+          transition: background-color 0.2s;
+        }
+        .btn-select-sticker:hover {
+          background-color: var(--bg-body);
+        }
+        .sticker-face {
+          font-size: 2.2rem;
+          display: block;
+        }
+        .sticker-label {
+          font-size: 0.65rem;
+          color: var(--text-muted);
+          font-weight: 700;
+          margin-top: 4px;
+        }
+        .btn-media-action {
+          background: none;
+          border: none;
+          color: var(--text-muted);
+          padding: 6px;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s;
+        }
+        .btn-media-action:hover, .btn-media-action.active {
+          background-color: var(--bg-body);
+          color: var(--primary);
+        }
+        .file-label-btn {
+          margin-bottom: 0;
+        }
+        
         .no-chat-selected {
           flex: 1;
           color: var(--text-muted);
