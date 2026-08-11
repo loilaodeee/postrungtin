@@ -15,16 +15,18 @@ const pool = new Pool({
 
 // Check/Initialize Firebase Admin
 let firebaseEnabled = false;
-if (admin.apps.length > 0) {
+try {
+  admin.app(); // Throws if the default app is not initialized
   firebaseEnabled = true;
   console.log('Chat module: Firebase Admin already initialized by parent process.');
-} else {
+} catch (e) {
+  // Not initialized, try to initialize it
   const SERVICE_ACCOUNT_FILE = path.join(__dirname, 'data', 'firebase-service-account.json');
   if (fs.existsSync(SERVICE_ACCOUNT_FILE)) {
     try {
       const serviceAccount = require(SERVICE_ACCOUNT_FILE);
       admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
+        credential: admin.cert ? admin.cert(serviceAccount) : admin.credential.cert(serviceAccount)
       });
       firebaseEnabled = true;
       console.log('Chat module: Firebase Admin initialized successfully.');
