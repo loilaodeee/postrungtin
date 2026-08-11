@@ -175,12 +175,20 @@ module.exports = function setupChat(app, io) {
   // Auth Middleware
   const authenticate = (req, res, next) => {
     const authHeader = req.headers['authorization'];
+    console.log(`[DEBUG AUTH] Path: ${req.path}, AuthHeader: ${authHeader}`);
     const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) return res.status(401).json({ error: 'Chưa xác thực đăng nhập!' });
+    if (!token) {
+      console.log(`[DEBUG AUTH] No token found for path ${req.path}`);
+      return res.status(401).json({ error: 'Chưa xác thực đăng nhập!' });
+    }
 
     jwt.verify(token, JWT_SECRET, (err, decoded) => {
-      if (err) return res.status(403).json({ error: 'Phiên đăng nhập hết hạn hoặc không hợp lệ!' });
+      if (err) {
+        console.log(`[DEBUG AUTH] JWT verification failed for path ${req.path}:`, err.message);
+        return res.status(403).json({ error: 'Phiên đăng nhập hết hạn hoặc không hợp lệ!' });
+      }
+      console.log(`[DEBUG AUTH] JWT verification SUCCESS for path ${req.path}, user: ${decoded.id}`);
       req.userId = decoded.id;
       next();
     });
@@ -188,6 +196,7 @@ module.exports = function setupChat(app, io) {
 
   // Search profiles
   app.get('/chat/users/search', authenticate, async (req, res) => {
+    console.log(`[DEBUG ROUTE] /chat/users/search handler triggered, query: ${req.query.query}`);
     const query = req.query.query ? req.query.query.trim().toLowerCase() : '';
     if (!query) return res.json([]);
 
@@ -205,6 +214,7 @@ module.exports = function setupChat(app, io) {
 
   // Friends & Requests list (Advanced query returning unread count and last seen)
   app.get('/chat/friends/list', authenticate, async (req, res) => {
+    console.log(`[DEBUG ROUTE] /chat/friends/list handler triggered, user: ${req.userId}`);
     try {
       const dbRes = await pool.query(
         `SELECT f.*, 
