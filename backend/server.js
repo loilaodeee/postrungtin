@@ -677,6 +677,23 @@ io.on('connection', (socket) => {
   await loadFcmTokens();
   await loadState();
 
+  // Print routing table for debugging
+  console.log('--- EXPRESS ROUTING TABLE ---');
+  app._router.stack.forEach((middleware) => {
+    if (middleware.route) {
+      console.log(`Route: ${Object.keys(middleware.route.methods).join(',').toUpperCase()} ${middleware.route.path}`);
+    } else if (middleware.name === 'router') {
+      middleware.handle.stack.forEach((handler) => {
+        if (handler.route) {
+          console.log(`Route (Router): ${Object.keys(handler.route.methods).join(',').toUpperCase()} ${handler.route.path}`);
+        }
+      });
+    } else {
+      console.log(`Middleware: ${middleware.name}`);
+    }
+  });
+  console.log('-----------------------------');
+
   server.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
   });
