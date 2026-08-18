@@ -11,7 +11,7 @@ import ChatScreen from './components/ChatScreen';
 import NoodleLoader from './components/NoodleLoader';
 
 export default function App() {
-  const [socketUrl, setSocketUrl] = useState('http://213.163.199.144');
+  const [socketUrl, setSocketUrl] = useState('http://postrungtin.duckdns.org');
   const [isConnected, setIsConnected] = useState(false);
   const [connectionError, setConnectionError] = useState(null);
   const [activeTab, setActiveTab] = useState('order'); // 'order' | 'kitchen' | 'game' | 'admin'
@@ -112,7 +112,7 @@ export default function App() {
           setSocketUrl(savedUrl);
         } else {
           // If no custom URL is saved, make sure we use our default VPS URL
-          setSocketUrl('http://213.163.199.144');
+          setSocketUrl('http://postrungtin.duckdns.org');
         }
       } catch (err) {
         console.error('AsyncStorage error:', err);
