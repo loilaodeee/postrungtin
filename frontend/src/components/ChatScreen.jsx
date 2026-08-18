@@ -1400,13 +1400,13 @@ export default function ChatScreen() {
         .message-bubble-wrapper.self .message-bubble {
           background-color: var(--primary);
           color: #ffffff;
-          border-bottom-right-radius: 2px;
+          border-bottom-right-radius: 16px;
         }
         .message-bubble-wrapper.other .message-bubble {
-          background-color: var(--bg-card);
-          border: 1px solid var(--border);
+          background-color: var(--bg-body);
+          border: none;
           color: var(--text);
-          border-bottom-left-radius: 2px;
+          border-bottom-left-radius: 16px;
         }
         
         /* Media and sticker styling */
@@ -1495,16 +1495,18 @@ export default function ChatScreen() {
         }
         .chat-input-bar input {
           flex: 1;
-          padding: 10px 14px;
-          border: 1px solid var(--border);
+          padding: 10px 16px;
+          border: none;
           border-radius: 99px;
           background-color: var(--bg-body);
           color: var(--text);
           font-size: 0.9rem;
+          transition: all 0.2s;
         }
         .chat-input-bar input:focus {
           outline: none;
-          border-color: var(--primary);
+          background-color: var(--bg-card);
+          box-shadow: 0 0 0 2px var(--primary);
         }
         .btn-send-message {
           width: 38px;

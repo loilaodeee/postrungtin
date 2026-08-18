@@ -817,7 +817,7 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
         {activeFriend && (
           <KeyboardAvoidingView
             style={styles.chatRoomContainer}
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
           >
             {/* Header */}
@@ -1058,7 +1058,7 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
                 onPress={handleSendMessage}
                 disabled={!inputText.trim()}
               >
-                <Text style={styles.btnSendText}>Gửi</Text>
+                <Text style={[styles.btnSendText, !inputText.trim() && styles.btnSendTextDisabled]}>Gửi</Text>
               </TouchableOpacity>
             </View>
           </KeyboardAvoidingView>
@@ -1439,12 +1439,13 @@ const styles = StyleSheet.create({
   },
   chatList: {
     flex: 1,
-    padding: 16
+    padding: 16,
+    backgroundColor: '#f8fafc'
   },
   bubbleWrapper: {
     flexDirection: 'row',
     width: '100%',
-    marginBottom: 12
+    marginBottom: 8
   },
   selfWrapper: {
     justifyContent: 'flex-end'
@@ -1454,18 +1455,15 @@ const styles = StyleSheet.create({
   },
   bubble: {
     maxWidth: '70%',
-    padding: 10,
-    borderRadius: 14
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 18
   },
   selfBubble: {
-    backgroundColor: '#2563eb',
-    borderBottomRightRadius: 2
+    backgroundColor: '#0084ff'
   },
   otherBubble: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderBottomLeftRadius: 2
+    backgroundColor: '#e4e6eb'
   },
   stickerBubbleStyle: {
     backgroundColor: 'transparent',
@@ -1534,29 +1532,27 @@ const styles = StyleSheet.create({
   },
   chatInput: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
     borderRadius: 20,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     fontSize: 14,
     color: '#0f172a',
-    backgroundColor: '#f8fafc'
+    backgroundColor: '#f1f5f9'
   },
   mediaRowActions: {
     flexDirection: 'row',
-    gap: 4
+    gap: 6
   },
   btnActionRound: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#f1f5f9',
     alignItems: 'center',
     justifyContent: 'center'
   },
   btnSend: {
-    backgroundColor: '#2563eb',
+    backgroundColor: '#0084ff',
     borderRadius: 20,
     paddingVertical: 8,
     paddingHorizontal: 16,
@@ -1564,12 +1560,15 @@ const styles = StyleSheet.create({
     alignItems: 'center'
   },
   btnSendDisabled: {
-    backgroundColor: '#cbd5e1'
+    backgroundColor: '#e2e8f0'
   },
   btnSendText: {
     color: '#ffffff',
     fontWeight: 'bold',
     fontSize: 13
+  },
+  btnSendTextDisabled: {
+    color: '#94a3b8'
   },
   panelContainer: {
     backgroundColor: '#ffffff',
