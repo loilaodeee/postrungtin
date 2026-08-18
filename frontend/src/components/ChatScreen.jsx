@@ -38,9 +38,9 @@ export default function ChatScreen() {
   const [isTyping, setIsTyping] = useState(false);
   const [friendTyping, setFriendTyping] = useState(false);
 
-  // Panels toggles
   const [showEmojiPanel, setShowEmojiPanel] = useState(false);
   const [showStickerPanel, setShowStickerPanel] = useState(false);
+  const [activeLightboxImg, setActiveLightboxImg] = useState(null);
 
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -422,48 +422,70 @@ export default function ChatScreen() {
     setShowStickerPanel(false);
   };
 
-  // Chat: Handle File Upload (Images & Videos)
-  const handleFileUpload = async (e, type) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // Chat: Handle File Upload (Images & Videos - Multiple support with local loading states)
+  const handleFileUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
 
-    const formData = new FormData();
-    formData.append('file', file);
+    for (const file of files) {
+      const isVideo = file.type.startsWith('video/') || file.name.endsWith('.mp4');
+      const mediaType = isVideo ? 'video' : 'image';
+      
+      const tempId = Date.now().toString() + Math.random().toString();
+      const localPreviewUrl = URL.createObjectURL(file); // Create local blob url for instant preview
+      
+      const tempMsg = {
+        id: tempId,
+        sender_id: user.id,
+        receiver_id: activeFriend.id,
+        content: localPreviewUrl,
+        media_type: mediaType,
+        created_at: new Date().toISOString(),
+        loading: true
+      };
+      
+      setMessages((prev) => [...prev, tempMsg]);
 
-    try {
-      const res = await fetch(`${CHAT_SERVER_URL}/upload`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-        body: formData
-      });
-      const data = await res.json();
-      if (data.error) {
-        alert(data.error);
-        return;
-      }
+      const formData = new FormData();
+      formData.append('file', file);
 
-      if (data.fileUrl) {
-        socketRef.current.emit('private-message', {
-          receiverId: activeFriend.id,
-          content: data.fileUrl,
-          media_type: type
+      try {
+        const res = await fetch(`${CHAT_SERVER_URL}/upload`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`
+          },
+          body: formData
         });
+        const data = await res.json();
+        
+        if (data.error) {
+          alert(`Lỗi: ${data.error}`);
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          continue;
+        }
 
-        const tempMsg = {
-          id: Date.now().toString(),
-          sender_id: user.id,
-          receiver_id: activeFriend.id,
-          content: data.fileUrl,
-          media_type: type,
-          created_at: new Date().toISOString()
-        };
-        setMessages((prev) => [...prev, tempMsg]);
+        if (data.fileUrl) {
+          socketRef.current.emit('private-message', {
+            receiverId: activeFriend.id,
+            content: data.fileUrl,
+            media_type: mediaType
+          });
+
+          // Replace loading message with server URL
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempId ? { ...m, content: data.fileUrl, loading: false } : m
+            )
+          );
+          
+          fetchFriendsList();
+        }
+      } catch (err) {
+        console.error('File upload error:', err);
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        alert('Không thể gửi file!');
       }
-    } catch (err) {
-      console.error('File upload error:', err);
-      alert('Không thể gửi file!');
     }
   };
 
@@ -844,8 +866,17 @@ export default function ChatScreen() {
                     <MessageSquare size={36} className="text-muted" />
                     <p>Hãy bắt đầu cuộc trò chuyện với {activeFriend.display_name}!</p>
                   </div>
-                ) : (
-                  messages.map((msg) => {
+                ) : (() => {
+                  const lastSentIndex = (() => {
+                    for (let i = messages.length - 1; i >= 0; i--) {
+                      if (messages[i].sender_id === user.id) {
+                        return i;
+                      }
+                    }
+                    return -1;
+                  })();
+
+                  return messages.map((msg, index) => {
                     const isSelf = msg.sender_id === user.id;
                     const date = new Date(msg.created_at);
                     const timeStr = date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
@@ -853,23 +884,41 @@ export default function ChatScreen() {
                     // Render media content based on message type
                     const renderBubbleContent = () => {
                       if (msg.media_type === 'image') {
+                        const imgUrl = msg.content.startsWith('http') || msg.content.startsWith('blob:')
+                          ? msg.content 
+                          : `http://${window.location.hostname}${msg.content}`;
                         return (
-                          <a href={msg.content.startsWith('http') ? msg.content : `http://${window.location.hostname}${msg.content}`} target="_blank" rel="noopener noreferrer">
+                          <div className="media-loading-container" style={{ cursor: 'pointer' }} onClick={() => setActiveLightboxImg(imgUrl)}>
                             <img
-                              src={msg.content.startsWith('http') ? msg.content : `http://${window.location.hostname}${msg.content}`}
+                              src={imgUrl}
                               alt="Gửi ảnh"
                               className="chat-image-content"
                             />
-                          </a>
+                            {msg.loading && (
+                              <div className="media-spinner-overlay">
+                                <div className="media-spinner"></div>
+                              </div>
+                            )}
+                          </div>
                         );
                       }
                       if (msg.media_type === 'video') {
+                        const vidUrl = msg.content.startsWith('http') || msg.content.startsWith('blob:')
+                          ? msg.content 
+                          : `http://${window.location.hostname}${msg.content}`;
                         return (
-                          <video
-                            src={msg.content.startsWith('http') ? msg.content : `http://${window.location.hostname}${msg.content}`}
-                            controls
-                            className="chat-video-content"
-                          />
+                          <div className="media-loading-container">
+                            <video
+                              src={vidUrl}
+                              controls={!msg.loading}
+                              className="chat-video-content"
+                            />
+                            {msg.loading && (
+                              <div className="media-spinner-overlay">
+                                <div className="media-spinner"></div>
+                              </div>
+                            )}
+                          </div>
                         );
                       }
                       if (msg.media_type === 'sticker') {
@@ -882,14 +931,21 @@ export default function ChatScreen() {
 
                     return (
                       <div key={msg.id} className={`message-bubble-wrapper ${isSelf ? 'self' : 'other'}`}>
-                        <div className={`message-bubble ${isSticker ? 'sticker-bubble' : ''}`}>
-                          {renderBubbleContent()}
-                          <span className="message-time">{timeStr}</span>
+                        <div className={`message-bubble-container ${isSelf ? 'self-align' : 'other-align'}`}>
+                          <div className={`message-bubble ${isSticker ? 'sticker-bubble' : ''}`}>
+                            {renderBubbleContent()}
+                            <span className="message-time">{timeStr}</span>
+                          </div>
+                          {index === lastSentIndex && !msg.loading && (
+                            <span className="message-status-text">
+                              {msg.is_read ? 'Đã xem' : 'Đã gửi'}
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
-                  })
-                )}
+                  });
+                })()}
                 {friendTyping && (
                   <div className="message-bubble-wrapper other">
                     <div className="message-bubble typing-indicator-bubble">
@@ -969,25 +1025,15 @@ export default function ChatScreen() {
                       <Sparkles size={18} />
                     </button>
 
-                    {/* Image picker */}
-                    <label className="btn-media-action file-label-btn" title="Gửi ảnh">
+                    {/* Image & Video picker (multiple) */}
+                    <label className="btn-media-action file-label-btn" title="Gửi ảnh hoặc video">
                       <Image size={18} />
                       <input
                         type="file"
-                        accept="image/*"
+                        accept="image/*,video/*"
+                        multiple
                         style={{ display: 'none' }}
-                        onChange={(e) => handleFileUpload(e, 'image')}
-                      />
-                    </label>
-
-                    {/* Video picker */}
-                    <label className="btn-media-action file-label-btn" title="Gửi video">
-                      <Film size={18} />
-                      <input
-                        type="file"
-                        accept="video/*"
-                        style={{ display: 'none' }}
-                        onChange={(e) => handleFileUpload(e, 'video')}
+                        onChange={handleFileUpload}
                       />
                     </label>
                   </div>
@@ -1018,6 +1064,17 @@ export default function ChatScreen() {
         </div>
 
       </div>
+
+      {activeLightboxImg && (
+        <div className="lightbox-overlay" onClick={() => setActiveLightboxImg(null)}>
+          <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
+            <img src={activeLightboxImg} alt="Phóng to" />
+            <button className="btn-close-lightbox" onClick={() => setActiveLightboxImg(null)}>
+              <X size={24} />
+            </button>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .social-chat-wrapper {
@@ -1555,6 +1612,100 @@ export default function ChatScreen() {
         .no-chat-selected p {
           font-size: 0.85rem;
           font-weight: 600;
+        }
+
+        /* Lightbox and loading spinner styles */
+        .lightbox-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(0, 0, 0, 0.95);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 99999;
+          animation: fadeIn 0.2s ease-out;
+        }
+        .lightbox-content {
+          position: relative;
+          max-width: 90vw;
+          max-height: 90vh;
+        }
+        .lightbox-content img {
+          max-width: 90vw;
+          max-height: 90vh;
+          object-fit: contain;
+          border-radius: 8px;
+        }
+        .btn-close-lightbox {
+          position: absolute;
+          top: -45px;
+          right: 0;
+          background: rgba(255, 255, 255, 0.15);
+          border: none;
+          color: #ffffff;
+          cursor: pointer;
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background-color 0.2s;
+        }
+        .btn-close-lightbox:hover {
+          background-color: rgba(255, 255, 255, 0.3);
+        }
+        .message-bubble-container {
+          display: flex;
+          flex-direction: column;
+          max-width: 65%;
+        }
+        .self-align {
+          align-items: flex-end;
+        }
+        .other-align {
+          align-items: flex-start;
+        }
+        .message-status-text {
+          font-size: 0.65rem;
+          color: var(--text-muted);
+          margin-top: 4px;
+          font-weight: 700;
+          opacity: 0.85;
+        }
+        .media-loading-container {
+          position: relative;
+          display: inline-block;
+        }
+        .media-spinner-overlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(0, 0, 0, 0.4);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 8px;
+        }
+        .media-spinner {
+          width: 28px;
+          height: 28px;
+          border: 3px solid rgba(255, 255, 255, 0.3);
+          border-radius: 50%;
+          border-top-color: #ffffff;
+          animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
       `}</style>
     </div>

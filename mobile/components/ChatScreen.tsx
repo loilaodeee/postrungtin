@@ -12,10 +12,12 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Image
+  Image,
+  Linking
 } from 'react-native';
 import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { launchImageLibrary } from 'react-native-image-picker';
 
 const STICKERS = [
   { code: '🍜', label: 'Hủ tiếu' },
@@ -58,10 +60,8 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
   const [showEmojiPanel, setShowEmojiPanel] = useState(false);
   const [showStickerPanel, setShowStickerPanel] = useState(false);
   
-  // Media URL Input Modal (To avoid native library compilation errors, we allow sending direct media URLs)
-  const [showMediaModal, setShowMediaModal] = useState(false);
-  const [mediaUrlInput, setMediaUrlInput] = useState('');
-  const [mediaTypeInput, setMediaTypeInput] = useState('image'); // 'image' | 'video'
+  // Lightbox Modal state
+  const [activeLightboxImg, setActiveLightboxImg] = useState<string | null>(null);
 
   const socketRef = useRef(null);
   const flatListRef = useRef(null);
@@ -454,28 +454,93 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
     setShowStickerPanel(false);
   };
 
-  // Messaging: Send Media URL (Direct Link to image or video)
-  const handleSendMediaUrl = () => {
-    if (!mediaUrlInput.trim() || !activeFriend || !socketRef.current) return;
-
-    socketRef.current.emit('private-message', {
-      receiverId: activeFriend.id,
-      content: mediaUrlInput.trim(),
-      media_type: mediaTypeInput
-    });
-
-    const echoMsg = {
-      id: Date.now().toString(),
-      sender_id: user.id,
-      receiver_id: activeFriend.id,
-      content: mediaUrlInput.trim(),
-      media_type: mediaTypeInput,
-      created_at: new Date().toISOString()
+  // Select media from phone gallery using system Photo Picker (no scary permissions required!)
+  const handleSelectMedia = () => {
+    const options = {
+      mediaType: 'mixed', // allows both images and videos
+      selectionLimit: 0, // 0 allows selecting multiple files
+      quality: 0.8
     };
-    setMessages((prev) => [...prev, echoMsg]);
 
-    setMediaUrlInput('');
-    setShowMediaModal(false);
+    launchImageLibrary(options, async (response) => {
+      if (response.didCancel) {
+        console.log('User cancelled media picker');
+        return;
+      }
+      if (response.errorCode) {
+        Alert.alert('Lỗi', response.errorMessage || 'Lỗi mở thư viện ảnh');
+        return;
+      }
+      if (response.assets && response.assets.length > 0) {
+        uploadMobileFiles(response.assets);
+      }
+    });
+  };
+
+  const uploadMobileFiles = async (assets) => {
+    for (const asset of assets) {
+      const isVideo = asset.type?.startsWith('video/') || asset.uri?.endsWith('.mp4') || asset.uri?.endsWith('.mov');
+      const mediaType = isVideo ? 'video' : 'image';
+
+      const tempId = Date.now().toString() + Math.random().toString();
+      
+      // Local preview message with loading indicator
+      const tempMsg = {
+        id: tempId,
+        sender_id: user.id,
+        receiver_id: activeFriend.id,
+        content: asset.uri, // Local preview path
+        media_type: mediaType,
+        created_at: new Date().toISOString(),
+        loading: true
+      };
+
+      setMessages((prev) => [...prev, tempMsg]);
+
+      const formData = new FormData();
+      formData.append('file', {
+        uri: Platform.OS === 'android' ? asset.uri : asset.uri.replace('file://', ''),
+        type: asset.type || (isVideo ? 'video/mp4' : 'image/jpeg'),
+        name: asset.fileName || (isVideo ? 'video.mp4' : 'image.jpg')
+      });
+
+      try {
+        const res = await fetch(`${CHAT_SERVER_URL}/upload`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'multipart/form-data'
+          },
+          body: formData
+        });
+        const data = await res.json();
+
+        if (data.error) {
+          Alert.alert('Gửi thất bại', data.error);
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          continue;
+        }
+
+        if (data.fileUrl) {
+          socketRef.current.emit('private-message', {
+            receiverId: activeFriend.id,
+            content: data.fileUrl,
+            media_type: mediaType
+          });
+
+          // Replace temp message with server url and remove loading state
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempId ? { ...m, content: data.fileUrl, loading: false } : m
+            )
+          );
+        }
+      } catch (err) {
+        console.error('File upload error on mobile:', err);
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        Alert.alert('Lỗi', 'Lỗi kết nối khi tải lên tệp tin!');
+      }
+    }
   };
 
   // Activity Status Formatting
@@ -770,71 +835,114 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
             </View>
 
             {/* Message Area */}
-            <FlatList
-              ref={flatListRef}
-              style={styles.chatList}
-              data={messages}
-              keyExtractor={(item) => item.id}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-              onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
-              renderItem={({ item }) => {
-                const isSelf = item.sender_id === user.id;
-                const time = new Date(item.created_at).toLocaleTimeString('vi-VN', {
-                  hour: '2-digit',
-                  minute: '2-digit'
-                });
-
-                const isSticker = item.media_type === 'sticker';
-                
-                const renderMobileBubbleContent = () => {
-                  if (item.media_type === 'image') {
-                    // Prepend dynamic absolute hostname if relative path
-                    const absoluteUrl = item.content.startsWith('http')
-                      ? item.content
-                      : `${CHAT_SERVER_URL.replace('/chat', '')}${item.content}`;
-                    return (
-                      <Image
-                        source={{ uri: absoluteUrl }}
-                        style={styles.chatImageMedia}
-                        resizeMode="cover"
-                      />
-                    );
+            {(() => {
+              const lastSentIndex = (() => {
+                for (let i = messages.length - 1; i >= 0; i--) {
+                  if (messages[i].sender_id === user.id) {
+                    return i;
                   }
-                  if (item.media_type === 'sticker') {
-                    return <Text style={styles.chatStickerMedia}>{item.content}</Text>;
-                  }
-                  return (
-                    <Text style={[styles.bubbleText, isSelf ? styles.selfText : styles.otherText]}>
-                      {item.content}
-                    </Text>
-                  );
-                };
+                }
+                return -1;
+              })();
 
-                return (
-                  <View style={[styles.bubbleWrapper, isSelf ? styles.selfWrapper : styles.otherWrapper]}>
-                    <View style={[
-                      styles.bubble,
-                      isSelf ? styles.selfBubble : styles.otherBubble,
-                      isSticker && styles.stickerBubbleStyle
-                    ]}>
-                      {renderMobileBubbleContent()}
-                      {!isSticker && (
-                        <Text style={[styles.bubbleTime, isSelf ? styles.selfTime : styles.otherTime]}>
-                          {time}
+              return (
+                <FlatList
+                  ref={flatListRef}
+                  style={styles.chatList}
+                  data={messages}
+                  keyExtractor={(item) => item.id}
+                  onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                  onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
+                  renderItem={({ item, index }) => {
+                    const isSelf = item.sender_id === user.id;
+                    const time = new Date(item.created_at).toLocaleTimeString('vi-VN', {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    });
+
+                    const isSticker = item.media_type === 'sticker';
+                    
+                    const renderMobileBubbleContent = () => {
+                      const absoluteUrl = item.content.startsWith('http') || item.content.startsWith('file:') || item.content.startsWith('content:')
+                        ? item.content
+                        : `${CHAT_SERVER_URL.replace('/chat', '')}${item.content}`;
+
+                      if (item.media_type === 'image') {
+                        return (
+                          <TouchableOpacity activeOpacity={0.9} onPress={() => setActiveLightboxImg(absoluteUrl)}>
+                            <View style={{ position: 'relative' }}>
+                              <Image
+                                source={{ uri: absoluteUrl }}
+                                style={styles.chatImageMedia}
+                                resizeMode="cover"
+                              />
+                              {item.loading && (
+                                <View style={styles.mediaSpinnerOverlay}>
+                                  <ActivityIndicator size="small" color="#ffffff" />
+                                </View>
+                              )}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      }
+                      if (item.media_type === 'video') {
+                        return (
+                          <TouchableOpacity activeOpacity={0.8} onPress={() => !item.loading && Linking.openURL(absoluteUrl)}>
+                            <View style={[styles.videoBubblePlaceholder, item.loading && styles.videoBubbleLoading]}>
+                              <Text style={styles.videoText}>
+                                {item.loading ? '⏳ Đang tải video...' : '🎥 Video (Chạm để phát)'}
+                              </Text>
+                              {item.loading ? (
+                                <ActivityIndicator size="small" color="#2563eb" style={{ marginLeft: 8 }} />
+                              ) : null}
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      }
+                      if (item.media_type === 'sticker') {
+                        return <Text style={styles.chatStickerMedia}>{item.content}</Text>;
+                      }
+                      return (
+                        <Text style={[styles.bubbleText, isSelf ? styles.selfText : styles.otherText]}>
+                          {item.content}
                         </Text>
-                      )}
+                      );
+                    };
+
+                    return (
+                      <View style={[styles.bubbleWrapper, isSelf ? styles.selfWrapper : styles.otherWrapper]}>
+                        <View style={[styles.bubbleContainerAlign, isSelf ? styles.alignRight : styles.alignLeft]}>
+                          <View style={[
+                            styles.bubble,
+                            isSelf ? styles.selfBubble : styles.otherBubble,
+                            isSticker && styles.stickerBubbleStyle
+                          ]}>
+                            {renderMobileBubbleContent()}
+                            {!isSticker && (
+                              <Text style={[styles.bubbleTime, isSelf ? styles.selfTime : styles.otherTime]}>
+                                {time}
+                              </Text>
+                            )}
+                          </View>
+                          {index === lastSentIndex && !item.loading && (
+                            <Text style={styles.statusText}>
+                              {item.is_read ? 'Đã xem' : 'Đã gửi'}
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  }}
+                  ListEmptyComponent={
+                    <View style={styles.chatEmptyBox}>
+                      <Text style={styles.chatEmptyText}>
+                        Hãy bắt đầu gửi tin nhắn trao đổi với {activeFriend.display_name}!
+                      </Text>
                     </View>
-                  </View>
-                );
-              }}
-              ListEmptyComponent={
-                <View style={styles.chatEmptyBox}>
-                  <Text style={styles.chatEmptyText}>
-                    Hãy bắt đầu gửi tin nhắn trao đổi với {activeFriend.display_name}!
-                  </Text>
-                </View>
-              }
-            />
+                  }
+                />
+              );
+            })()}
 
             {/* Emojis list panel */}
             {showEmojiPanel && (
@@ -876,60 +984,24 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
               </View>
             )}
 
-            {/* Media input modal */}
+            {/* Lightbox full-screen image preview */}
             <Modal
-              visible={showMediaModal}
-              transparent
+              visible={!!activeLightboxImg}
+              transparent={true}
               animationType="fade"
-              onRequestClose={() => setShowMediaModal(false)}
+              onRequestClose={() => setActiveLightboxImg(null)}
             >
-              <View style={styles.modalBackdrop}>
-                <View style={styles.modalCard}>
-                  <Text style={styles.modalTitle}>Gửi Liên Kết Media</Text>
-                  
-                  <View style={styles.typeSelectorRow}>
-                    <TouchableOpacity
-                      style={[styles.typeBtn, mediaTypeInput === 'image' && styles.typeBtnActive]}
-                      onPress={() => setMediaTypeInput('image')}
-                    >
-                      <Text style={[styles.typeBtnText, mediaTypeInput === 'image' && styles.typeBtnTextActive]}>
-                        Hình Ảnh
-                      </Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity
-                      style={[styles.typeBtn, mediaTypeInput === 'video' && styles.typeBtnActive]}
-                      onPress={() => setMediaTypeInput('video')}
-                    >
-                      <Text style={[styles.typeBtnText, mediaTypeInput === 'video' && styles.typeBtnTextActive]}>
-                        Video (Mp4)
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  <TextInput
-                    style={styles.modalInput}
-                    placeholder="Dán link http://... ở đây"
-                    placeholderTextColor="#94a3b8"
-                    value={mediaUrlInput}
-                    onChangeText={setMediaUrlInput}
+              <View style={styles.lightboxBackdrop}>
+                <TouchableOpacity style={styles.lightboxCloseBtn} onPress={() => setActiveLightboxImg(null)}>
+                  <Text style={styles.lightboxCloseText}>✕</Text>
+                </TouchableOpacity>
+                {activeLightboxImg && (
+                  <Image
+                    source={{ uri: activeLightboxImg }}
+                    style={styles.lightboxImage}
+                    resizeMode="contain"
                   />
-
-                  <View style={styles.modalActions}>
-                    <TouchableOpacity
-                      style={[styles.btnModalAction, { backgroundColor: '#e2e8f0' }]}
-                      onPress={() => setShowMediaModal(false)}
-                    >
-                      <Text style={{ color: '#475569', fontWeight: 'bold' }}>Quay lại</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.btnModalAction, { backgroundColor: '#2563eb' }]}
-                      onPress={handleSendMediaUrl}
-                    >
-                      <Text style={{ color: '#ffffff', fontWeight: 'bold' }}>Gửi link</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                )}
               </View>
             </Modal>
 
@@ -965,12 +1037,12 @@ export default function ChatScreen({ socketUrl, fcmToken }) {
                   <Text style={{ fontSize: 16 }}>🍜</Text>
                 </TouchableOpacity>
 
-                {/* Media Url picker */}
+                {/* Media picker from Gallery (Images & Videos) */}
                 <TouchableOpacity
                   style={styles.btnActionRound}
-                  onPress={() => setShowMediaModal(true)}
+                  onPress={handleSelectMedia}
                 >
-                  <Text style={{ fontSize: 16 }}>🔗</Text>
+                  <Text style={{ fontSize: 16 }}>📷</Text>
                 </TouchableOpacity>
               </View>
 
@@ -1579,5 +1651,77 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 6
+  },
+  mediaSpinnerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 10
+  },
+  videoBubblePlaceholder: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#e2e8f0',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16
+  },
+  videoBubbleLoading: {
+    backgroundColor: '#f8fafc'
+  },
+  videoText: {
+    fontSize: 13,
+    color: '#2563eb',
+    fontWeight: 'bold'
+  },
+  bubbleContainerAlign: {
+    flexDirection: 'column'
+  },
+  alignRight: {
+    alignItems: 'flex-end'
+  },
+  alignLeft: {
+    alignItems: 'flex-start'
+  },
+  statusText: {
+    fontSize: 9,
+    color: '#64748b',
+    marginTop: 2,
+    fontWeight: '700',
+    opacity: 0.8
+  },
+  lightboxBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  lightboxCloseBtn: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 20,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999
+  },
+  lightboxCloseText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: 'bold'
+  },
+  lightboxImage: {
+    width: '100%',
+    height: '100%'
   }
 });

@@ -67,14 +67,32 @@ async function sendPushNotification(userId, title, body, dataPayload = {}) {
 
     const message = {
       notification: { title, body },
-      data: dataPayload
+      data: {
+        ...dataPayload,
+        click_action: 'FLUTTER_NOTIFICATION_CLICK'
+      },
+      android: {
+        priority: 'high',
+        notification: {
+          sound: 'default',
+          channelId: 'pos_high_importance_channel',
+          priority: 'max',
+          visibility: 'public'
+        }
+      }
     };
 
-    await admin.messaging().sendEachForMulticast({
-      tokens,
-      notification: message.notification,
-      data: message.data
-    });
+    const messaging = admin.messaging();
+    for (const token of tokens) {
+      try {
+        await messaging.send({
+          ...message,
+          token
+        });
+      } catch (err) {
+        console.error(`Error sending push to chat token ${token.substring(0, 10)}...:`, err);
+      }
+    }
     console.log(`Chat push notification sent to user ID: ${userId}`);
   } catch (error) {
     console.error('Error sending chat push notification:', error);
