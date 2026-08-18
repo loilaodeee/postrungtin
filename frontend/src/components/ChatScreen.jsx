@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
-import { Send, Image, Film, Smile, LogOut, MessageSquare, Sparkles, User, Check, X, FileText, Search } from 'lucide-react';
+import { Send, Image, Film, Smile, LogOut, MessageSquare, Sparkles, User, UserPlus, Check, X, FileText, Search } from 'lucide-react';
 
 const STICKERS = [
   { code: '🍜', label: 'Hủ tiếu' },
